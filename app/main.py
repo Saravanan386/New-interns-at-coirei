@@ -1,0 +1,93 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.database import engine, Base
+from app.models import user, classroom as classroom_model, session, attendance as attendance_model, schedule as schedule_model, module, test as test_model, enrollment, assignment as assignment_model, chat as chat_model, notification as notification_model, instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, group_chat as group_chat_model
+
+from app.routers import (
+    auth,
+    meet,
+    webhooks,
+    attendance,
+    classroom,
+    dashboard,
+    classes,
+    assignments,
+    resources,
+    sessions,
+    courses,
+    student_attendance,
+    enroll,
+    instructor_enroll,
+    schedule,
+    modules,
+    tests,
+    batch_analytics,
+    chat,
+    notifications,
+    qa,
+    dm_chat,
+    group_chat,
+    chat_uploads,
+    ws_chat,
+    user_profiles,
+)
+
+app = FastAPI(
+    title="LMS Backend",
+    version="0.1.0",
+    description="LMS API with LiveKit video conferencing",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+        "https://maya-ohonogramis-dayton.ngrok-free.dev",
+        "https://lms-lime-chi.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Auto-create tables
+Base.metadata.create_all(bind=engine)
+
+# Routers
+app.include_router(auth.router)
+app.include_router(meet.router)
+app.include_router(webhooks.router)
+app.include_router(attendance.router)
+app.include_router(classroom.router)
+app.include_router(dashboard.router)
+app.include_router(classes.router)
+app.include_router(assignments.router)
+app.include_router(resources.router)
+app.include_router(sessions.router)
+app.include_router(courses.router)
+app.include_router(student_attendance.router)
+app.include_router(enroll.router)
+app.include_router(instructor_enroll.router)
+app.include_router(schedule.router)
+app.include_router(modules.router)
+app.include_router(tests.router)
+app.include_router(batch_analytics.router)
+app.include_router(chat.router)
+app.include_router(notifications.router)
+app.include_router(qa.router)
+app.include_router(dm_chat.router)
+app.include_router(group_chat.router)
+app.include_router(chat_uploads.router)
+app.include_router(ws_chat.router)
+app.include_router(user_profiles.router)
+
+
+@app.get("/")
+def health():
+    return {"status": "LMS backend running"}

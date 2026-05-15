@@ -1,0 +1,33 @@
+# Core framework
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+
+# Database
+sqlalchemy==2.0.29
+psycopg2-binary==2.9.9
+
+# Auth & Security
+python-jose==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# Environment & Config
+python-dotenv==1.0.1
+
+# File upload support (required for FastAPI Form/File endpoints)
+python-multipart==0.0.22
+
+# Async + Networking
+httpx==0.27.0
+
+# Date & Time utilities
+python-dateutil==2.9.0.post0
+
+# Validation
+pydantic==2.6.4
+
+# 100ms (video conferencing)
+PyJWT==2.8.0
+
+# Timezone data (required for zoneinfo on Windows/Linux deployments)
+tzdata
