@@ -1,44 +1,104 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
+from app.database import get_db
 from app.models.classroom import Classroom
-from app.services.jwt_service import get_current_user
+from app.models.course import Course
 
-router = APIRouter(prefix="/classrooms", tags=["Classrooms"])
+# IMPORTANT
+from app.utils.security import get_current_user
+
+from app.schemas import ClassroomResponse
+
+router = APIRouter(
+    prefix="/classrooms",
+    tags=["Classrooms"]
+)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-@router.post("/")
+# -------------------------------------------------------------------
+# CREATE CLASSROOM
+# -------------------------------------------------------------------
+@router.post(
+    "/",
+    response_model=ClassroomResponse
+)
 def create_classroom(
-    name: str,
-    user=Depends(get_current_user),
+    course_id: int = Body(...),
+    batch_name: str = Body(...),
+    room_name: str = Body(...),
+
+    current_user: dict = Depends(get_current_user),
+
     db: Session = Depends(get_db),
 ):
-    if user["role"] not in ["admin", "instructor"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
 
-    classroom = Classroom(name=name)
-    db.add(classroom)
+    # AUTH CHECK
+    if current_user["role"] not in ["admin", "instructor"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized"
+        )
+
+    # VALIDATE COURSE
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id)
+        .first()
+    )
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    # PREVENT DUPLICATE BATCH
+    existing_batch = (
+        db.query(Classroom)
+        .filter(
+            Classroom.course_id == course_id,
+            Classroom.batch_name == batch_name
+        )
+        .first()
+    )
+
+    if existing_batch:
+        raise HTTPException(
+            status_code=400,
+            detail="Batch already exists for this course"
+        )
+
+    # CREATE CLASSROOM
+    new_classroom = Classroom(
+        course_id=course.id,
+        course_name=course.name,
+        batch_name=batch_name,
+        room_name=room_name
+    )
+
+    db.add(new_classroom)
+
     db.commit()
-    db.refresh(classroom)
 
-    return {
-        "id": classroom.id,
-        "name": classroom.name
-    }
+    db.refresh(new_classroom)
+
+    return new_classroom
 
 
-@router.get("/")
+# -------------------------------------------------------------------
+# LIST CLASSROOMS
+# -------------------------------------------------------------------
+@router.get(
+    "/",
+    response_model=list[ClassroomResponse]
+)
 def list_classrooms(
-    user=Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
+
     db: Session = Depends(get_db),
 ):
-    return db.query(Classroom).all()
+
+    classrooms = db.query(Classroom).all()
+
+    return classrooms

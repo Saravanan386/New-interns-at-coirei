@@ -121,75 +121,121 @@ def enroll_instructor(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    # Only admin can create instructors
-    if current_user.get("role") not in ["admin"]:
-        raise HTTPException(status_code=403, detail="Only admins can enroll instructors")
+    # ---------------------------------------------------
+    # ONLY ADMIN
+    # ---------------------------------------------------
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can enroll instructors"
+        )
 
     if not payload.course_batches:
-        raise HTTPException(status_code=400, detail="At least one course+batch must be selected")
+        raise HTTPException(
+            status_code=400,
+            detail="At least one course+batch must be selected"
+        )
 
-    # --- Validate every course+batch pair up-front ---
+    # ---------------------------------------------------
+    # VALIDATE COURSE + BATCHES
+    # ---------------------------------------------------
     for item in payload.course_batches:
-        course = db.query(Course).filter(Course.id == item.course_id).first()
+
+        course = db.query(Course).filter(
+            Course.id == item.course_id
+        ).first()
+
         if not course:
             raise HTTPException(
                 status_code=404,
                 detail=f"Course ID {item.course_id} not found"
             )
-        valid_batch = (
-            db.query(Classroom)
-            .filter(
-                Classroom.course_id == item.course_id,
-                Classroom.batch_name == item.batch_name
-            )
-            .first()
-        )
-        if not valid_batch:
+
+        batch = db.query(Classroom).filter(
+            Classroom.course_id == item.course_id,
+            Classroom.batch_name == item.batch_name
+        ).first()
+
+        if not batch:
             raise HTTPException(
                 status_code=400,
-                detail=f"Batch '{item.batch_name}' does not exist for course ID {item.course_id}"
+                detail=f"Batch '{item.batch_name}' not found"
             )
 
-    # --- Check email not already taken ---
-    if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    # ---------------------------------------------------
+    # CHECK EXISTING USER
+    # ---------------------------------------------------
+    existing_user = db.query(User).filter(
+        User.email == payload.email
+    ).first()
 
-    # --- Create instructor user ---
-    instructor_id = generate_instructor_id(db)
-    raw_password = generate_password()
-    full_name = f"{payload.first_name} {payload.last_name}"
+    # ---------------------------------------------------
+    # EXISTING INSTRUCTOR
+    # ---------------------------------------------------
+    if existing_user:
 
-    user = User(
-        name=full_name,
-        email=payload.email,
-        password_hash=hash_password(raw_password),
-        role="instructor",
-        student_id=instructor_id   # reusing the student_id column for the instructor code
-    )
-    db.add(user)
-    db.flush()   # get user.id without committing
-
-    # --- Create one enrollment record per course+batch ---
-    enrollments = []
-    for item in payload.course_batches:
-        # Guard against duplicates within the same request
-        existing = (
-            db.query(InstructorEnrollment)
-            .filter(
-                InstructorEnrollment.user_id == user.id,
-                InstructorEnrollment.course_id == item.course_id,
-                InstructorEnrollment.batch_name == item.batch_name
+        if existing_user.role != "instructor":
+            raise HTTPException(
+                status_code=400,
+                detail="User already exists but is not an instructor"
             )
-            .first()
+
+        user = existing_user
+        instructor_id = user.student_id
+        raw_password = None
+
+    # ---------------------------------------------------
+    # NEW INSTRUCTOR
+    # ---------------------------------------------------
+    else:
+
+        instructor_id = generate_instructor_id(db)
+        raw_password = generate_password()
+
+        full_name = f"{payload.first_name} {payload.last_name}"
+
+        user = User(
+            name=full_name,
+            email=payload.email,
+            password_hash=hash_password(raw_password),
+            role="instructor",
+            student_id=instructor_id
         )
-        if not existing:
-            enr = InstructorEnrollment(
-                user_id=user.id,
-                course_id=item.course_id,
-                batch_name=item.batch_name
-            )
-            db.add(enr)
-            enrollments.append({"course_id": item.course_id, "batch_name": item.batch_name})
+
+        db.add(user)
+        db.flush()
+
+    # ---------------------------------------------------
+    # CREATE ENROLLMENTS
+    # ---------------------------------------------------
+    assigned = []
+
+    for item in payload.course_batches:
+
+        existing_assignment = db.query(
+            InstructorEnrollment
+        ).filter(
+            InstructorEnrollment.user_id == user.id,
+            InstructorEnrollment.course_id == item.course_id,
+            InstructorEnrollment.batch_name == item.batch_name
+        ).first()
+
+        # skip duplicates
+        if existing_assignment:
+            continue
+
+        enrollment = InstructorEnrollment(
+            user_id=user.id,
+            course_id=item.course_id,
+            batch_name=item.batch_name
+        )
+
+        db.add(enrollment)
+
+        assigned.append({
+            "course_id": item.course_id,
+            "batch_name": item.batch_name
+        })
 
     db.commit()
     db.refresh(user)
@@ -198,13 +244,15 @@ def enroll_instructor(
         "message": "Instructor enrolled successfully",
         "instructor_id": instructor_id,
         "user_id": user.id,
-        "name": full_name,
-        "email": payload.email,
-        "auto_generated_password": raw_password,   # ← share this with the instructor
-        "assigned_courses_batches": enrollments
+        "name": user.name,
+        "email": user.email,
+        "auto_generated_password": raw_password,
+        "assigned_courses_batches": assigned
     }
 
 
+
+    
 # ---------------------------------------------------------------------------
 # POST /instructor-enroll/reset-password  — generate new password for instructor
 # ---------------------------------------------------------------------------

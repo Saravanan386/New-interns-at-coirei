@@ -459,3 +459,71 @@ class UserProfileResponse(BaseModel):
 
 class QAVisibilityUpdate(BaseModel):
     visibility: str  # 'public' | 'private'
+
+
+
+class ClassroomResponse(BaseModel):
+    id: int
+    course_id: int
+    course_name: str
+    batch_name: str
+    room_name: str
+
+    class Config:
+        from_attributes = True
+
+    # In app/schemas.py
+class ClassroomCreate(BaseModel):
+    course_id: int          # User selects this (dropdown in UI)
+    room_name: str          # User types this
+    # We remove 'name' or 'batch_name' from input if you want to auto-generate it, 
+    # or keep it if the user types the batch name too. 
+    # Assuming you want to type Batch Name too based on previous context:
+    batch_name: str         
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "course_id": 1,
+                "batch_name": "Batch-C",
+                "room_name": "AI_ML_Room"
+            }
+        }   
+
+
+class ClassroomCreate(BaseModel):
+    course_id: int
+    batch_name: str
+    room_name: str
+
+
+
+# ----------  courses --------
+
+
+class CourseCreate(BaseModel):
+    course_code: str
+    name: str
+    description: str | None = None
+    duration_months: int
+    total_lessons: int
+
+
+class CourseUpdate(BaseModel):
+    course_code: str | None = None
+    name: str | None = None
+    description: str | None = None
+    duration_months: int | None = None
+    total_lessons: int | None = None
+
+
+class CourseResponse(BaseModel):
+    id: int
+    course_code: str
+    name: str
+    description: str | None
+    duration_months: int
+    total_lessons: int
+
+    class Config:
+        orm_mode = True

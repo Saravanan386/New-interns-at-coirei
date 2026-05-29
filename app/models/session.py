@@ -24,6 +24,4 @@ class ClassSession(Base):
     start_time = Column(DateTime)
     end_time = Column(DateTime)
 
-    __table_args__ = (
-        UniqueConstraint("course_id", "batch_name", name="uq_course_batch"),
-    )
+   
