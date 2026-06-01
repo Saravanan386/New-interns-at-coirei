@@ -121,81 +121,47 @@ def enroll_instructor(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    # ---------------------------------------------------
-    # ONLY ADMIN
-    # ---------------------------------------------------
+
     if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=403,
             detail="Only admins can enroll instructors"
         )
 
-    if not payload.course_batches:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one course+batch must be selected"
-        )
+   
 
-    # ---------------------------------------------------
-    # VALIDATE COURSE + BATCHES
-    # ---------------------------------------------------
-    for item in payload.course_batches:
-
-        course = db.query(Course).filter(
-            Course.id == item.course_id
-        ).first()
-
-        if not course:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Course ID {item.course_id} not found"
-            )
-
-        batch = db.query(Classroom).filter(
-            Classroom.course_id == item.course_id,
-            Classroom.batch_name == item.batch_name
-        ).first()
-
-        if not batch:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Batch '{item.batch_name}' not found"
-            )
-
-    # ---------------------------------------------------
-    # CHECK EXISTING USER
-    # ---------------------------------------------------
     existing_user = db.query(User).filter(
         User.email == payload.email
     ).first()
 
-    # ---------------------------------------------------
-    # EXISTING INSTRUCTOR
-    # ---------------------------------------------------
+    created_new_user = False
+
+    # ------------------------------------------------
+    # EXISTING USER
+    # ------------------------------------------------
     if existing_user:
 
         if existing_user.role != "instructor":
             raise HTTPException(
                 status_code=400,
-                detail="User already exists but is not an instructor"
+                detail="User exists but is not instructor"
             )
 
         user = existing_user
-        instructor_id = user.student_id
+
         raw_password = None
 
-    # ---------------------------------------------------
-    # NEW INSTRUCTOR
-    # ---------------------------------------------------
+    # ------------------------------------------------
+    # NEW USER
+    # ------------------------------------------------
     else:
 
         instructor_id = generate_instructor_id(db)
+
         raw_password = generate_password()
 
-        full_name = f"{payload.first_name} {payload.last_name}"
-
         user = User(
-            name=full_name,
+            name=f"{payload.first_name} {payload.last_name}",
             email=payload.email,
             password_hash=hash_password(raw_password),
             role="instructor",
@@ -203,56 +169,78 @@ def enroll_instructor(
         )
 
         db.add(user)
+
         db.flush()
 
-    # ---------------------------------------------------
-    # CREATE ENROLLMENTS
-    # ---------------------------------------------------
+        created_new_user = True
+
     assigned = []
+
 
     for item in payload.course_batches:
 
-        existing_assignment = db.query(
-            InstructorEnrollment
-        ).filter(
-            InstructorEnrollment.user_id == user.id,
-            InstructorEnrollment.course_id == item.course_id,
-            InstructorEnrollment.batch_name == item.batch_name
-        ).first()
+        classroom = (
+            db.query(Classroom)
+            .filter(
+                Classroom.course_id == item.course_id,
+                Classroom.batch_name == item.batch_name
+            )
+            .first()
+        )
 
-        # skip duplicates
+        if not classroom:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Classroom not found for Course {item.course_id} Batch {item.batch_name}"
+            )
+
+        existing_assignment = (
+            db.query(InstructorEnrollment)
+            .filter(
+                InstructorEnrollment.user_id == user.id,
+                InstructorEnrollment.classroom_id == classroom.id
+            )
+            .first()
+        )
+
         if existing_assignment:
             continue
 
         enrollment = InstructorEnrollment(
             user_id=user.id,
-            course_id=item.course_id,
-            batch_name=item.batch_name
+            classroom_id=classroom.id
         )
 
         db.add(enrollment)
 
+        classroom.instructor_id = user.id
+        classroom.instructor_name = user.name
+
         assigned.append({
-            "course_id": item.course_id,
-            "batch_name": item.batch_name
+            "classroom_id": classroom.id,
+            "course_id": classroom.course_id,
+            "batch_name": classroom.batch_name,
+            "room_name": classroom.room_name
         })
 
+
     db.commit()
+
     db.refresh(user)
 
     return {
         "message": "Instructor enrolled successfully",
-        "instructor_id": instructor_id,
         "user_id": user.id,
+        "instructor_id": user.student_id,
         "name": user.name,
         "email": user.email,
         "auto_generated_password": raw_password,
+        "created_new_user": created_new_user,
         "assigned_courses_batches": assigned
     }
 
 
 
-    
 # ---------------------------------------------------------------------------
 # POST /instructor-enroll/reset-password  — generate new password for instructor
 # ---------------------------------------------------------------------------
@@ -294,26 +282,58 @@ def list_instructors(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    if current_user.get("role") not in ["admin"]:
-        raise HTTPException(status_code=403, detail="Only admins can view all instructors")
 
-    instructors = db.query(User).filter(User.role == "instructor").all()
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can view instructors"
+        )
+
+    instructors = (
+        db.query(User)
+        .filter(User.role == "instructor")
+        .all()
+    )
+
     result = []
+
     for inst in instructors:
-        assignments = (
-            db.query(InstructorEnrollment, Course)
-            .join(Course, InstructorEnrollment.course_id == Course.id)
-            .filter(InstructorEnrollment.user_id == inst.id)
+
+        enrollments = (
+            db.query(
+                InstructorEnrollment,
+                Classroom,
+                Course
+            )
+            .join(
+                Classroom,
+                InstructorEnrollment.classroom_id == Classroom.id
+            )
+            .join(
+                Course,
+                Classroom.course_id == Course.id
+            )
+            .filter(
+                InstructorEnrollment.user_id == inst.id
+            )
             .all()
         )
+
         result.append({
-            "instructor_id": inst.student_id,
             "user_id": inst.id,
+            "instructor_id": inst.student_id,
             "name": inst.name,
             "email": inst.email,
-            "course_batches": [
-                {"course_id": enr.course_id, "course_name": course.name, "batch_name": enr.batch_name}
-                for enr, course in assignments
+            "classrooms": [
+                {
+                    "classroom_id": classroom.id,
+                    "course_id": course.id,
+                    "course_name": course.name,
+                    "batch_name": classroom.batch_name,
+                    "room_name": classroom.room_name
+                }
+                for _, classroom, course in enrollments
             ]
         })
+
     return result

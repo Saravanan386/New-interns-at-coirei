@@ -153,11 +153,14 @@ def enroll_student(
 
     # Check not already enrolled in same course+batch
     if existing_user:
-        already_enrolled = db.query(Enrollment).filter(
-            Enrollment.user_id == existing_user.id,
-            Enrollment.course_id == course_id,
-            Enrollment.batch_name == batch_name
-        ).first()
+        already_enrolled = (
+            db.query(Enrollment)
+            .filter(
+                Enrollment.user_id == existing_user.id,
+                Enrollment.classroom_id == valid_batch.id
+            )
+            .first()
+        )
         if already_enrolled:
             raise HTTPException(status_code=400, detail="Student already enrolled in this batch")
 
@@ -177,14 +180,13 @@ def enroll_student(
     db.add(user)
     db.flush()   # get user.id without committing
 
-    # Create enrollment
+        # Create enrollment
     enrollment = Enrollment(
-        user_id=user.id,
-        course_id=course_id,
-        batch_name=batch_name,
-        status="ongoing",
-        progress_percent=0
-    )
+    user_id=user.id,
+    classroom_id=valid_batch.id,
+    status="ongoing",
+    progress_percent=0
+)
     db.add(enrollment)
     db.commit()
     db.refresh(user)
@@ -199,7 +201,8 @@ def enroll_student(
         "auto_generated_password": raw_password,   # ← share this with the student
         "course": course.name,
         "batch_name": batch_name,
-        "enrollment_id": enrollment.id
+        "enrollment_id": enrollment.id,
+        "classroom_id": valid_batch.id
     }
 
 

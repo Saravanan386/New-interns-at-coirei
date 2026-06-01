@@ -10,42 +10,46 @@ from app.utils.security import get_current_user
 
 from app.schemas import ClassroomResponse
 
+
+
 router = APIRouter(
     prefix="/classrooms",
     tags=["Classrooms"]
 )
 
 
-# -------------------------------------------------------------------
-# CREATE CLASSROOM
-# -------------------------------------------------------------------
-@router.post(
-    "/",
-    response_model=ClassroomResponse
-)
+def generate_batch_code(course_name: str, batch_name: str):
+    course_part = "".join(
+        word[0].upper()
+        for word in course_name.split()
+        if word
+    )
+
+    batch_part = batch_name.upper().replace(" ", "-")
+
+    return f"{course_part}-{batch_part}"
+
+
+@router.post("/")
 def create_classroom(
     course_id: int = Body(...),
     batch_name: str = Body(...),
     room_name: str = Body(...),
-
-    current_user: dict = Depends(get_current_user),
-
+    schedule_type: str = Body(None),
+    start_month: str = Body(None),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
 
-    # AUTH CHECK
-    if current_user["role"] not in ["admin", "instructor"]:
+    if current_user["role"] != "admin":
         raise HTTPException(
             status_code=403,
-            detail="Not authorized"
+            detail="Only admins can create classrooms"
         )
 
-    # VALIDATE COURSE
-    course = (
-        db.query(Course)
-        .filter(Course.id == course_id)
-        .first()
-    )
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
 
     if not course:
         raise HTTPException(
@@ -53,39 +57,43 @@ def create_classroom(
             detail="Course not found"
         )
 
-    # PREVENT DUPLICATE BATCH
-    existing_batch = (
-        db.query(Classroom)
-        .filter(
-            Classroom.course_id == course_id,
-            Classroom.batch_name == batch_name
-        )
-        .first()
-    )
+    existing = db.query(Classroom).filter(
+        Classroom.course_id == course_id,
+        Classroom.batch_name == batch_name
+    ).first()
 
-    if existing_batch:
+    if existing:
         raise HTTPException(
             status_code=400,
-            detail="Batch already exists for this course"
+            detail="Batch already exists"
         )
 
-    # CREATE CLASSROOM
-    new_classroom = Classroom(
-        course_id=course.id,
-        course_name=course.name,
-        batch_name=batch_name,
-        room_name=room_name
+    batch_code = generate_batch_code(
+        course.name,
+        batch_name
     )
 
-    db.add(new_classroom)
+    classroom = Classroom(
+        course_id=course_id,
+        batch_name=batch_name,
+        room_name=room_name,
+        instructor_id=None,
+        instructor_name=None,
+        batch_code=batch_code,
+        schedule_type=schedule_type,
+        start_month=start_month
+    )
+
+    db.add(classroom)
 
     db.commit()
 
-    db.refresh(new_classroom)
+    db.refresh(classroom)
 
-    return new_classroom
+    return classroom
 
 
+    
 # -------------------------------------------------------------------
 # LIST CLASSROOMS
 # -------------------------------------------------------------------

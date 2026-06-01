@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
 from app.models.attendance import SessionParticipant
+from app.models.classroom import Classroom
 from app.models.enrollment import Enrollment
 from app.models.instructor_enrollment import InstructorEnrollment
 from app.models.session import ClassSession
@@ -21,7 +22,10 @@ from app.utils.security import get_current_user
 
 IST = ZoneInfo("Asia/Kolkata")
 
-router = APIRouter(prefix="/sessions", tags=["Sessions"])
+router = APIRouter(
+    prefix="/sessions",
+    tags=["Sessions"]
+)
 
 # ---------------------------------------------------------------------------
 # ATTENDANCE SETTINGS
@@ -36,15 +40,13 @@ ATTENDANCE_THRESHOLD_SECONDS = ATTENDANCE_THRESHOLD_MINUTES * 60
 # ---------------------------------------------------------------------------
 
 async def auto_mark_attendance(participant_id: int):
-    """
-    Auto-calculate attendance after threshold time.
-    """
 
     await asyncio.sleep(ATTENDANCE_THRESHOLD_SECONDS)
 
     db: Session = SessionLocal()
 
     try:
+
         record = db.query(SessionParticipant).filter(
             SessionParticipant.id == participant_id
         ).first()
@@ -57,9 +59,12 @@ async def auto_mark_attendance(participant_id: int):
 
         now = datetime.now(IST).replace(tzinfo=None)
 
-        # If student still inside class
         if record.leave_time is None and record.join_time:
-            duration = (now - record.join_time).total_seconds() / 60
+
+            duration = (
+                now - record.join_time
+            ).total_seconds() / 60
+
             record.duration_minutes = round(duration, 2)
 
         db.commit()
@@ -71,10 +76,11 @@ async def auto_mark_attendance(participant_id: int):
             SessionParticipant.user_id == record.user_id
         ).scalar() or 0
 
-        if total_duration >= ATTENDANCE_THRESHOLD_MINUTES:
-            record.status = "present"
-        else:
-            record.status = "absent"
+        record.status = (
+            "present"
+            if total_duration >= ATTENDANCE_THRESHOLD_MINUTES
+            else "absent"
+        )
 
         db.commit()
 
@@ -88,53 +94,65 @@ async def auto_mark_attendance(participant_id: int):
 
 @router.post("/start")
 async def start_session(
-    course_id: int,
-    batch_name: str,
+    classroom_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
 
-    # Only instructor
+    # ONLY INSTRUCTORS
     if current_user["role"] != "instructor":
+
         raise HTTPException(
             status_code=403,
             detail="Only instructors can start sessions"
         )
 
-    # Check instructor assigned
+    # VALIDATE CLASSROOM
+    classroom = db.query(Classroom).filter(
+        Classroom.id == classroom_id
+    ).first()
+
+    if not classroom:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Classroom not found"
+        )
+
+    # CHECK ASSIGNMENT
     assignment = db.query(InstructorEnrollment).filter(
         InstructorEnrollment.user_id == current_user["user_id"],
-        InstructorEnrollment.course_id == course_id,
-        InstructorEnrollment.batch_name == batch_name
+        InstructorEnrollment.classroom_id == classroom_id
     ).first()
 
     if not assignment:
+
         raise HTTPException(
             status_code=403,
-            detail="You are not assigned to this batch"
+            detail="You are not assigned to this classroom"
         )
 
-    # Check if already live
+    # CHECK LIVE SESSION
     existing_live = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name,
+        ClassSession.classroom_id == classroom_id,
         ClassSession.status == "live"
     ).first()
 
     if existing_live:
+
         raise HTTPException(
             status_code=400,
-            detail="A live session is already running for this batch"
+            detail="A live session already exists"
         )
 
-    # Create room
-    room_name = f"course_{course_id}_batch_{batch_name.replace(' ', '_')}"
+    # CREATE ROOM
+    room_name = f"classroom_{classroom.id}"
+
     room = create_room(room_name)
 
-    # Create new session
+    # CREATE SESSION
     session = ClassSession(
-        course_id=course_id,
-        batch_name=batch_name,
+        classroom_id=classroom.id,
         livekit_room_name=room["room_id"],
         host_url=room["host_url"],
         join_url=room["guest_url"],
@@ -143,12 +161,15 @@ async def start_session(
     )
 
     db.add(session)
+
     db.commit()
+
     db.refresh(session)
 
     return {
         "message": "Session started successfully",
         "session_id": session.id,
+        "classroom_id": classroom.id,
         "room_id": room["room_id"],
         "meet_link": room["host_url"],
         "guest_link": room["guest_url"],
@@ -162,39 +183,49 @@ async def start_session(
 
 @router.get("/active")
 def get_active_session(
-    course_id: int,
-    batch_name: str,
+    classroom_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
 
     session = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name,
+        ClassSession.classroom_id == classroom_id,
         ClassSession.status == "live"
-    ).order_by(ClassSession.id.desc()).first()
+    ).order_by(
+        ClassSession.id.desc()
+    ).first()
 
     if not session:
+
         return {
             "live": False,
             "join_enabled": False
         }
 
-    is_instructor = current_user.get("role") == "instructor"
+    is_instructor = (
+        current_user.get("role") == "instructor"
+    )
 
-    meet_link = session.host_url if is_instructor else session.join_url
+    meet_link = (
+        session.host_url
+        if is_instructor
+        else session.join_url
+    )
 
-    # Append user name
+    # ADD USER NAME TO URL
     user_record = db.query(User).filter(
         User.id == current_user["user_id"]
     ).first()
 
     if user_record and user_record.name:
-        encoded_name = urllib.parse.quote(user_record.name)
 
-        connector = "&" if "?" in meet_link else "?"
+        encoded_name = urllib.parse.quote(
+            user_record.name
+        )
 
-        meet_link = f"{meet_link}{connector}name={encoded_name}"
+        meet_link = (
+            f"{meet_link}&userInfo.displayName={encoded_name}"
+        )
 
     participant = db.query(SessionParticipant).filter(
         SessionParticipant.session_id == session.id,
@@ -206,10 +237,15 @@ def get_active_session(
         "live": True,
         "join_enabled": True,
         "session_id": session.id,
+        "classroom_id": classroom_id,
         "room_id": session.livekit_room_name,
         "meet_link": meet_link,
         "is_joined": participant is not None,
-        "participant_status": participant.status if participant else None
+        "participant_status": (
+            participant.status
+            if participant
+            else None
+        )
     }
 
 
@@ -219,45 +255,47 @@ def get_active_session(
 
 @router.post("/join")
 async def join_session(
-    course_id: int,
-    batch_name: str,
+    classroom_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
 
     if current_user["role"] != "student":
+
         raise HTTPException(
             status_code=403,
             detail="Only students can join"
         )
 
-    # Check live session
+    # CHECK LIVE SESSION
     session = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name,
+        ClassSession.classroom_id == classroom_id,
         ClassSession.status == "live"
-    ).order_by(ClassSession.id.desc()).first()
+    ).order_by(
+        ClassSession.id.desc()
+    ).first()
 
     if not session:
+
         raise HTTPException(
             status_code=400,
             detail="Class not live"
         )
 
-    # Check enrollment
+    # CHECK ENROLLMENT
     enrolled = db.query(Enrollment).filter(
         Enrollment.user_id == current_user["user_id"],
-        Enrollment.course_id == course_id,
-        Enrollment.batch_name == batch_name
+        Enrollment.classroom_id == classroom_id
     ).first()
 
     if not enrolled:
+
         raise HTTPException(
             status_code=403,
             detail="Student not enrolled"
         )
 
-    # Already joined
+    # ALREADY JOINED
     existing = db.query(SessionParticipant).filter(
         SessionParticipant.session_id == session.id,
         SessionParticipant.user_id == current_user["user_id"],
@@ -265,6 +303,7 @@ async def join_session(
     ).first()
 
     if existing:
+
         return {
             "status": "already_joined"
         }
@@ -277,10 +316,14 @@ async def join_session(
     )
 
     db.add(participant)
+
     db.commit()
+
     db.refresh(participant)
 
-    asyncio.create_task(auto_mark_attendance(participant.id))
+    asyncio.create_task(
+        auto_mark_attendance(participant.id)
+    )
 
     return {
         "status": "joined",
@@ -306,6 +349,7 @@ def leave_session(
     ).first()
 
     if not record:
+
         raise HTTPException(
             status_code=404,
             detail="No active attendance record"
@@ -316,12 +360,15 @@ def leave_session(
     record.leave_time = now
 
     if not record.join_time:
+
         raise HTTPException(
             status_code=400,
             detail="Invalid attendance record"
         )
 
-    duration = (now - record.join_time).total_seconds() / 60
+    duration = (
+        now - record.join_time
+    ).total_seconds() / 60
 
     record.duration_minutes = round(duration, 2)
 
@@ -364,6 +411,7 @@ def end_session(
 ):
 
     if current_user["role"] != "instructor":
+
         raise HTTPException(
             status_code=403,
             detail="Only instructors can end sessions"
@@ -374,25 +422,27 @@ def end_session(
     ).first()
 
     if not session:
+
         raise HTTPException(
             status_code=404,
             detail="Session not found"
         )
 
-    # Check instructor assignment
+    # CHECK ASSIGNMENT
     assignment = db.query(InstructorEnrollment).filter(
         InstructorEnrollment.user_id == current_user["user_id"],
-        InstructorEnrollment.course_id == session.course_id,
-        InstructorEnrollment.batch_name == session.batch_name
+        InstructorEnrollment.classroom_id == session.classroom_id
     ).first()
 
     if not assignment:
+
         raise HTTPException(
             status_code=403,
-            detail="You are not assigned to this batch"
+            detail="You are not assigned to this classroom"
         )
 
     if session.status != "live":
+
         raise HTTPException(
             status_code=400,
             detail="Session already ended"
@@ -401,9 +451,10 @@ def end_session(
     now = datetime.now(IST).replace(tzinfo=None)
 
     session.status = "ended"
+
     session.end_time = now
 
-    # Finalize open participants
+    # FINALIZE PARTICIPANTS
     open_records = db.query(SessionParticipant).filter(
         SessionParticipant.session_id == session_id,
         SessionParticipant.leave_time == None,
@@ -433,13 +484,15 @@ def end_session(
             else "absent"
         )
 
-    # Mark absent students
+    # FIND ENROLLED STUDENTS
     enrolled_students = db.query(Enrollment).filter(
-        Enrollment.course_id == session.course_id,
-        Enrollment.batch_name == session.batch_name
+        Enrollment.classroom_id == session.classroom_id
     ).all()
 
-    enrolled_ids = {e.user_id for e in enrolled_students}
+    enrolled_ids = {
+        e.user_id
+        for e in enrolled_students
+    }
 
     joined_ids = {
         r.user_id
@@ -515,19 +568,29 @@ def session_history(
     current_user: dict = Depends(get_current_user)
 ):
 
-    sessions = db.query(ClassSession).order_by(
+    sessions = db.query(
+        ClassSession,
+        Classroom
+    ).join(
+        Classroom,
+        Classroom.id == ClassSession.classroom_id
+    ).order_by(
         ClassSession.id.desc()
     ).all()
 
-    return [
-        {
-            "session_id": s.id,
-            "course_id": s.course_id,
-            "batch_name": s.batch_name,
-            "status": s.status,
-            "start_time": s.start_time,
-            "end_time": s.end_time,
-            "room_name": s.livekit_room_name
-        }
-        for s in sessions
-    ]
+    result = []
+
+    for session, classroom in sessions:
+
+        result.append({
+            "session_id": session.id,
+            "classroom_id": classroom.id,
+            "course_id": classroom.course_id,
+            "batch_name": classroom.batch_name,
+            "status": session.status,
+            "start_time": session.start_time,
+            "end_time": session.end_time,
+            "room_name": session.livekit_room_name
+        })
+
+    return result

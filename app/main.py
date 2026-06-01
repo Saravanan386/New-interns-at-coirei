@@ -2,7 +2,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
-from app.models import user, classroom as classroom_model, session, attendance as attendance_model, schedule as schedule_model, module, test as test_model, enrollment, assignment as assignment_model, chat as chat_model, notification as notification_model, instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, group_chat as group_chat_model
+# Consolidated Models (Including registration_profile from new version)
+from app.models import (
+    user, classroom as classroom_model, session, attendance as attendance_model, 
+    schedule as schedule_model, module, test as test_model, enrollment, 
+    assignment as assignment_model, chat as chat_model, notification as notification_model, 
+    instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, 
+    group_chat as group_chat_model, registration_profile as registration_profile_model
+)
 
 from app.routers import (
     auth,
@@ -10,12 +17,18 @@ from app.routers import (
     webhooks,
     attendance,
     classroom,
+    # Dashboards from both versions
+    admin_dashboard,
+    student_dashboard,
+    instructor_dashboard,
     dashboard,
     classes,
+    class_scores, # From New
     assignments,
     resources,
     sessions,
     courses,
+    student, # From New
     student_attendance,
     enroll,
     instructor_enroll,
@@ -31,6 +44,7 @@ from app.routers import (
     chat_uploads,
     ws_chat,
     user_profiles,
+    instructor, # From New
 )
 
 app = FastAPI(
@@ -39,6 +53,7 @@ app = FastAPI(
     description="LMS API with LiveKit video conferencing",
 )
 
+# Merged allow_origins to include all URLs from both versions
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -50,6 +65,7 @@ app.add_middleware(
         "http://127.0.0.1:5175",
         "https://maya-ohonogramis-dayton.ngrok-free.dev",
         "https://lms-lime-chi.vercel.app",
+        "https://admin-lms-seven.vercel.app", # From New
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -59,18 +75,23 @@ app.add_middleware(
 # Auto-create tables
 Base.metadata.create_all(bind=engine)
 
-# Routers
+# Routers - Carefully merged to prevent duplicates
 app.include_router(auth.router)
 app.include_router(meet.router)
 app.include_router(webhooks.router)
 app.include_router(attendance.router)
 app.include_router(classroom.router)
 app.include_router(dashboard.router)
+app.include_router(admin_dashboard.router)      # Re-added
+app.include_router(student_dashboard.router)    # Re-added
+app.include_router(instructor_dashboard.router) # Re-added
 app.include_router(classes.router)
+app.include_router(class_scores.router)         # From New
 app.include_router(assignments.router)
 app.include_router(resources.router)
 app.include_router(sessions.router)
 app.include_router(courses.router)
+app.include_router(student.router)              # From New
 app.include_router(student_attendance.router)
 app.include_router(enroll.router)
 app.include_router(instructor_enroll.router)
@@ -86,8 +107,4 @@ app.include_router(group_chat.router)
 app.include_router(chat_uploads.router)
 app.include_router(ws_chat.router)
 app.include_router(user_profiles.router)
-
-
-@app.get("/")
-def health():
-    return {"status": "LMS backend running"}
+app.include_router(instructor.router)           # From New

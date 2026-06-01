@@ -465,13 +465,18 @@ class QAVisibilityUpdate(BaseModel):
 class ClassroomResponse(BaseModel):
     id: int
     course_id: int
-    course_name: str
     batch_name: str
     room_name: str
 
+    instructor_id: int | None = None
+    instructor_name: str | None = None
+
+    batch_code: str | None = None
+    schedule_type: str | None = None
+    start_month: str | None = None
+
     class Config:
         from_attributes = True
-
     # In app/schemas.py
 class ClassroomCreate(BaseModel):
     course_id: int          # User selects this (dropdown in UI)
@@ -527,3 +532,98 @@ class CourseResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+
+
+
+
+
+
+
+
+
+# ----------   registration -----------#
+
+import re
+from datetime import date, datetime
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s\-()]{7,19}$")
+ACCOUNT_STATUSES = {"active", "pending", "inactive", "suspended"}
+
+
+class AddressMixin(BaseModel):
+    address_line1: Optional[str] = Field(default=None, max_length=255)
+    address_line2: Optional[str] = Field(default=None, max_length=255)
+    city: Optional[str] = Field(default=None, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    country: Optional[str] = Field(default=None, max_length=100)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+
+
+class RegistrationBase(AddressMixin):
+    full_name: str = Field(min_length=2, max_length=150)
+    email: str = Field(max_length=255)
+    phone_number: str = Field(min_length=8, max_length=30)
+    password: str = Field(min_length=8, max_length=128)
+    profile_image_url: Optional[str] = Field(default=None, max_length=500)
+    account_status: str = "active"
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not EMAIL_PATTERN.match(normalized):
+            raise ValueError("Invalid email address")
+        return normalized
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone_number(cls, value: str) -> str:
+        normalized = value.strip()
+        if not PHONE_PATTERN.match(normalized):
+            raise ValueError("Invalid phone number")
+        return normalized
+
+    @field_validator("account_status")
+    @classmethod
+    def validate_account_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ACCOUNT_STATUSES:
+            raise ValueError("Invalid account status")
+        return normalized
+
+
+class InstructorRegistrationRequest(RegistrationBase):
+    bio: Optional[str] = Field(default=None, max_length=5000)
+    qualifications: Optional[List[str]] = None
+    experience_years: Optional[int] = Field(default=None, ge=0, le=80)
+    skills: Optional[List[str]] = None
+    specialization: Optional[str] = Field(default=None, max_length=150)
+    social_links: Optional[Dict[str, str]] = None
+
+
+class StudentRegistrationRequest(RegistrationBase):
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = Field(default=None, max_length=50)
+    education_details: Optional[Dict[str, str]] = None
+    interests: Optional[List[str]] = None
+
+
+class RegistrationResponse(BaseModel):
+    id: int
+    user_id: int
+    full_name: str
+    email: str
+    phone_number: str
+    role: str
+    account_status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
