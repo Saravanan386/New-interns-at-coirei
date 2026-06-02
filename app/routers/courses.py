@@ -5,6 +5,13 @@ from app.utils.security import get_current_user
 from app.models.course import Course
 from app.models.enrollment import Enrollment
 from app.models.classroom import Classroom
+from app.models.session import ClassSession
+from sqlalchemy import func
+from datetime import datetime
+
+
+
+from app.database import get_db
 from app.schemas import (
     CourseCreate,
     CourseUpdate,
@@ -45,63 +52,105 @@ def get_my_courses(
 
 @router.get("/")
 def list_courses(db: Session = Depends(get_db)):
-    return db.query(Course).all()
 
+    courses = db.query(Course).all()
 
+    response = []
 
-@router.get("/{course_id}")
-def get_course(
-    course_id: int,
-    db: Session = Depends(get_db)
-):
-    course = (
-        db.query(Course)
-        .filter(Course.id == course_id)
-        .first()
-    )
+    for course in courses:
 
-    if not course:
-        raise HTTPException(
-            status_code=404,
-            detail="Course not found"
+        classrooms = db.query(Classroom).filter(
+            Classroom.course_id == course.id
+        ).all()
+
+        classroom_ids = [c.id for c in classrooms]
+
+        student_count = 0
+
+        if classroom_ids:
+            student_count = db.query(Enrollment).filter(
+                Enrollment.classroom_id.in_(classroom_ids)
+            ).count()
+
+        instructors = list(
+            set(
+                [
+                    c.instructor_name
+                    for c in classrooms
+                    if c.instructor_name
+                ]
+            )
         )
 
-    return course
+        response.append({
+            "id": course.id,
+            "name": course.name,
+            "course_code": course.course_code,
+            "description": course.description,
+            "total_batches": len(classrooms),
+            "total_students": student_count,
+            "instructors": instructors
+        })
 
+    return response
 
 
 @router.get("/{course_id}/classrooms")
 def get_course_classrooms(
     course_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
-    course = (
-        db.query(Course)
-        .filter(Course.id == course_id)
-        .first()
-    )
 
-    if not course:
-        raise HTTPException(
-            status_code=404,
-            detail="Course not found"
-        )
+    classrooms = db.query(Classroom).filter(
+        Classroom.course_id == course_id
+    ).all()
 
-    classrooms = (
-        db.query(Classroom)
-        .filter(Classroom.course_id == course_id)
-        .all()
-    )
+    response = []
 
-    return {
-        "course": {
-            "id": course.id,
-            "name": course.name,
-            "course_code": course.course_code,
-            "description": course.description
-        },
-        "classrooms": classrooms
-    }
+    for classroom in classrooms:
+
+        enrollments = db.query(
+            Enrollment
+        ).filter(
+            Enrollment.classroom_id == classroom.id
+        ).all()
+
+        student_count = len(enrollments)
+
+        avg_completion = 0
+
+        if enrollments:
+
+            avg_completion = round(
+                sum(
+                    e.progress_percent
+                    for e in enrollments
+                ) / len(enrollments)
+            )
+
+        status = "active"
+
+        response.append({
+            "id": classroom.id,
+            "batch_name": classroom.batch_name,
+            "batch_code": classroom.batch_code,
+            "room_name": classroom.room_name,
+
+            "status": status,
+
+            "student_count": student_count,
+
+            "completion_count": avg_completion,
+
+            "instructor_name": classroom.instructor_name,
+
+            "schedule_type": classroom.schedule_type,
+
+            "start_month": classroom.start_month
+        })
+
+    return response
 
 @router.get("/{course_id}/batches")
 def get_course_batches(course_id: int, db: Session = Depends(get_db)):
@@ -114,10 +163,13 @@ def get_course_batches(course_id: int, db: Session = Depends(get_db)):
     
     return sorted(list(all_batches))
 
+
+
 @router.delete("/{course_id}")
 def delete_course(
     course_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     course = (
         db.query(Course)
@@ -144,7 +196,8 @@ def delete_course(
 )
 def create_course(
     data: CourseCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
 
     existing = db.query(Course).filter(
@@ -180,7 +233,8 @@ def create_course(
 def update_course(
     course_id: int,
     data: CourseUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
 
     course = db.query(Course).filter(
@@ -203,3 +257,252 @@ def update_course(
     db.refresh(course)
 
     return course
+
+
+@router.get("/{classroom_id}/overview")
+def classroom_overview(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+
+    classroom = db.query(
+        Classroom
+    ).filter(
+        Classroom.id == classroom_id
+    ).first()
+
+    if not classroom:
+        raise HTTPException(
+            status_code=404,
+            detail="Classroom not found"
+        )
+
+    course = db.query(
+        Course
+    ).filter(
+        Course.id == classroom.course_id
+    ).first()
+
+    enrollments = db.query(
+        Enrollment
+    ).filter(
+        Enrollment.classroom_id == classroom.id
+    ).all()
+
+    total_students = len(enrollments)
+
+    avg_progress = 0
+
+    if enrollments:
+        avg_progress = round(
+            sum(
+                e.progress_percent
+                for e in enrollments
+            ) / total_students
+        )
+
+    next_session = db.query(
+        ClassSession
+    ).filter(
+        ClassSession.classroom_id == classroom.id
+    ).order_by(
+        ClassSession.start_time.asc()
+    ).first()
+
+    next_session_text = "No session"
+
+    if next_session:
+        next_session_text = (
+            next_session.start_time.strftime(
+                "%d %b %Y %I:%M %p"
+            )
+        )
+
+    return {
+        "batch_id": classroom.batch_code,
+        "course_id": course.id,
+        "course_name": course.name,
+        "description": course.description,
+
+        "stats": {
+            "total_students": total_students,
+            "average_progress": avg_progress,
+            "next_session": next_session_text,
+            "duration_months": course.duration_months
+        },
+
+        "batch": {
+            "id": classroom.id,
+            "batch_name": classroom.batch_name,
+            "batch_code": classroom.batch_code,
+            "room_name": classroom.room_name,
+            "schedule_type": classroom.schedule_type,
+            "class_days": classroom.class_days,
+            "start_time": classroom.start_time,
+            "end_time": classroom.end_time,
+            "start_month": classroom.start_month
+        },
+
+        "instructor": {
+            "id": classroom.instructor_id,
+            "name": classroom.instructor_name
+        },
+
+        "enrollment": {
+            "total": total_students,
+            "average_progress": avg_progress
+        },
+
+        "upcoming_sessions": [
+            {
+                "id": s.id,
+                "status": s.status,
+                "start_time": (
+                    s.start_time.isoformat()
+                    if s.start_time
+                    else None
+                ),
+                "end_time": (
+                    s.end_time.isoformat()
+                    if s.end_time
+                    else None
+                )
+            }
+            for s in db.query(
+                ClassSession
+            ).filter(
+                ClassSession.classroom_id == classroom.id
+            ).all()
+        ]
+    }
+
+
+
+@router.get("/{course_id}/batches/{classroom_id}/overview")
+def batch_overview(
+    course_id: int,
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id)
+        .first()
+    )
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    classroom = (
+        db.query(Classroom)
+        .filter(
+            Classroom.id == classroom_id,
+            Classroom.course_id == course_id
+        )
+        .first()
+    )
+
+    if not classroom:
+        raise HTTPException(
+            status_code=404,
+            detail="Batch not found"
+        )
+
+    enrollments = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.classroom_id == classroom.id
+        )
+        .all()
+    )
+
+    total_students = len(enrollments)
+
+    avg_progress = 0
+
+    if total_students > 0:
+        avg_progress = round(
+            sum(
+                e.progress_percent
+                for e in enrollments
+            ) / total_students
+        )
+
+    sessions = (
+        db.query(ClassSession)
+        .filter(
+            ClassSession.classroom_id == classroom.id
+        )
+        .order_by(
+            ClassSession.start_time.asc()
+        )
+        .all()
+    )
+
+    upcoming_sessions = []
+
+    now = datetime.utcnow()
+
+    for session in sessions:
+
+        if (
+            session.start_time
+            and session.start_time >= now
+        ):
+
+            upcoming_sessions.append({
+                "id": session.id,
+                "status": session.status,
+                "start_time": session.start_time.isoformat(),
+                "end_time": (
+                    session.end_time.isoformat()
+                    if session.end_time
+                    else None
+                ),
+                "join_url": session.join_url
+            })
+
+    next_session = None
+
+    if upcoming_sessions:
+        next_session = upcoming_sessions[0]["start_time"]
+
+    return {
+        "batch_id": classroom.id,
+        "batch_code": classroom.batch_code,
+
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "description": course.description,
+            "duration_months": course.duration_months,
+            "total_lessons": course.total_lessons
+        },
+
+        "classroom": {
+            "id": classroom.id,
+            "batch_name": classroom.batch_name,
+            "room_name": classroom.room_name,
+            "schedule_type": classroom.schedule_type,
+            "start_month": classroom.start_month
+        },
+
+        "stats": {
+            "total_students": total_students,
+            "average_progress": avg_progress,
+            "next_session": next_session
+        },
+
+        "instructor": {
+            "id": classroom.instructor_id,
+            "name": classroom.instructor_name
+        },
+
+        "upcoming_sessions": upcoming_sessions
+    }

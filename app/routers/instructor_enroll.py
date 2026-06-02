@@ -24,6 +24,8 @@ from app.models.classroom import Classroom
 from app.models.instructor_enrollment import InstructorEnrollment
 from app.utils.security import get_current_user, hash_password
 
+from app.models.schedule import CourseSchedule
+
 router = APIRouter(prefix="/instructor-enroll", tags=["Instructor Enrollment"])
 
 
@@ -215,6 +217,27 @@ def enroll_instructor(
 
         classroom.instructor_id = user.id
         classroom.instructor_name = user.name
+
+        db.query(CourseSchedule).filter(
+            CourseSchedule.course_id == classroom.course_id,
+            CourseSchedule.batch_name == classroom.batch_name
+        ).update({
+            "instructor_name": user.name
+        })
+        def sync_schedule_instructor(
+            db,
+            classroom
+        ):
+            db.query(CourseSchedule).filter(
+                CourseSchedule.course_id == classroom.course_id,
+                CourseSchedule.batch_name == classroom.batch_name
+            ).update(
+                {
+                    "instructor_name": classroom.instructor_name
+                }
+            )
+
+            db.commit()
 
         assigned.append({
             "classroom_id": classroom.id,

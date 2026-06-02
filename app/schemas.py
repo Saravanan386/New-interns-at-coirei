@@ -503,6 +503,26 @@ class ClassroomCreate(BaseModel):
 
 
 
+
+
+
+
+class ClassroomCreate(BaseModel):
+    course_id: int
+    batch_name: str
+    room_name: str
+
+    schedule_type: Optional[str] = None
+
+    class_days: List[str]
+
+    start_time: str
+    end_time: str
+
+    start_month: Optional[str] = None
+
+    instructor_id: Optional[int] = None
+
 # ----------  courses --------
 
 
@@ -627,3 +647,8 @@ class RegistrationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+
+#

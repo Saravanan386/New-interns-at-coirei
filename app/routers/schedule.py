@@ -18,13 +18,13 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # Day-name → weekday number (Monday=0 … Sunday=6)
 DAY_MAP = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
+    "mon": "monday",
+    "tue": "tuesday",
+    "wed": "wednesday",
+    "thu": "thursday",
+    "fri": "friday",
+    "sat": "saturday",
+    "sun": "sunday"
 }
 
 
@@ -48,50 +48,8 @@ class SetScheduleRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # POST /schedule/set  — instructor sets the weekly timetable
 # ---------------------------------------------------------------------------
-@router.post("/set")
-def set_schedule(
-    body: SetScheduleRequest,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    if current_user["role"] != "instructor":
-        raise HTTPException(status_code=403, detail="Only instructors can set schedules")
-
-    # Validate day names
-    for entry in body.entries:
-        if entry.day_of_week.lower() not in DAY_MAP:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid day_of_week: '{entry.day_of_week}'. "
-                       f"Use: {', '.join(DAY_MAP.keys())}"
-            )
-
-    # Delete existing schedule for this course+batch, then re-insert
-    db.query(CourseSchedule).filter(
-        CourseSchedule.course_id == body.course_id,
-        CourseSchedule.batch_name == body.batch_name
-    ).delete()
-
-    for entry in body.entries:
-        db.add(CourseSchedule(
-            course_id=body.course_id,
-            batch_name=body.batch_name,
-            day_of_week=entry.day_of_week.lower(),
-            session_type=entry.session_type,
-            start_time=entry.start_time,
-            end_time=entry.end_time,
-            instructor_name=entry.instructor_name,
-        ))
-
-    db.commit()
-    return {
-        "message": f"Schedule set successfully with {len(body.entries)} entries",
-        "course_id": body.course_id,
-        "batch_name": body.batch_name,
-    }
-
-
-# ---------------------------------------------------------------------------
+#
+# -------------------------------------------------------------------
 # GET /schedule/upcoming  — returns next 3 upcoming scheduled sessions
 # ---------------------------------------------------------------------------
 @router.get("/upcoming")
@@ -195,19 +153,77 @@ def get_schedule(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    rows = db.query(CourseSchedule).filter(
-        CourseSchedule.course_id == course_id,
-        CourseSchedule.batch_name == batch_name
-    ).order_by(CourseSchedule.id).all()
 
-    return [
-        {
-            "id": r.id,
-            "day_of_week": r.day_of_week,
-            "session_type": r.session_type,
-            "start_time": r.start_time,
-            "end_time": r.end_time,
-            "instructor_name": r.instructor_name,
-        }
-        for r in rows
-    ]
+    rows = (
+        db.query(CourseSchedule)
+        .filter(
+            CourseSchedule.course_id == course_id,
+            CourseSchedule.batch_name == batch_name
+        )
+        .order_by(CourseSchedule.id)
+        .all()
+    )
+
+    return {
+        "course_id": course_id,
+        "batch_name": batch_name,
+        "total_days": len(rows),
+        "schedule": [
+            {
+                "id": row.id,
+                "day": row.day_of_week,
+                "topic": row.topic,
+                "session_type": row.session_type,
+                "start_time": row.start_time,
+                "end_time": row.end_time,
+                "start_date": (
+                    row.start_date.isoformat()
+                    if row.start_date
+                    else None
+                ),
+                "instructor_name": row.instructor_name
+            }
+            for row in rows
+        ]
+    }
+
+
+
+@router.delete("/{schedule_id}")
+def delete_schedule(
+    schedule_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can delete schedules"
+        )
+
+    schedule = (
+        db.query(CourseSchedule)
+        .filter(
+            CourseSchedule.id == schedule_id
+        )
+        .first()
+    )
+
+    if not schedule:
+        raise HTTPException(
+            status_code=404,
+            detail="Schedule not found"
+        )
+
+    db.delete(schedule)
+
+    db.commit()
+
+    return {
+        "message": "Schedule deleted successfully"
+    }
+
+
+
+
