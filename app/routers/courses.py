@@ -8,7 +8,9 @@ from app.models.classroom import Classroom
 from app.models.session import ClassSession
 from sqlalchemy import func
 from datetime import datetime
-
+from app.models.schedule import CourseSchedule
+from app.models.instructor_enrollment import InstructorEnrollment
+from sqlalchemy.orm import joinedload
 
 
 from app.database import get_db
@@ -505,4 +507,183 @@ def batch_overview(
         },
 
         "upcoming_sessions": upcoming_sessions
+    }
+
+
+@router.get("/{course_id}/full-overview")
+def course_full_overview(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    classrooms = db.query(Classroom).filter(
+        Classroom.course_id == course_id
+    ).all()
+
+   
+
+    schedules = db.query(CourseSchedule).filter(
+        CourseSchedule.course_id == course_id
+    ).all()
+
+    total_students = 0
+    instructor_names = set()
+
+    batch_details = []
+
+    for classroom in classrooms:
+
+        enrollments = db.query(Enrollment).filter(
+            Enrollment.classroom_id == classroom.id
+        ).all()
+
+        batch_students = len(enrollments)
+
+        total_students += batch_students
+
+        avg_progress = 0
+
+        if batch_students:
+
+            avg_progress = round(
+                sum(
+                    e.progress_percent
+                    for e in enrollments
+                ) / batch_students
+            )
+
+        instructor_names.add(
+            classroom.instructor_name
+        )
+
+        batch_schedules = [
+            {
+                "day": s.day_of_week,
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "session_type": s.session_type
+            }
+            for s in schedules
+            if s.batch_name == classroom.batch_name
+        ]
+
+        
+
+        batch_details.append({
+
+            "classroom_id": classroom.id,
+
+            "batch_name": classroom.batch_name,
+
+            "batch_code": classroom.batch_code,
+
+            "room_name": classroom.room_name,
+
+            "schedule_type": classroom.schedule_type,
+
+            "start_month": classroom.start_month,
+
+            "class_days": classroom.class_days,
+
+            "start_time": classroom.start_time,
+
+            "end_time": classroom.end_time,
+
+            "instructor_id": classroom.instructor_id,
+
+            "instructor_name": classroom.instructor_name,
+
+            "student_count": batch_students,
+
+            "average_progress": avg_progress,
+
+
+            "schedule": batch_schedules
+        })
+
+    upcoming_sessions = db.query(
+        ClassSession
+    ).join(
+        Classroom,
+        Classroom.id == ClassSession.classroom_id
+    ).filter(
+        Classroom.course_id == course_id
+    ).order_by(
+        ClassSession.start_time.asc()
+    ).limit(10).all()
+
+    return {
+
+        "course": {
+
+            "id": course.id,
+
+            "course_code": course.course_code,
+
+            "name": course.name,
+
+            "description": course.description,
+
+            "duration_months": course.duration_months,
+
+            "total_lessons": course.total_lessons
+        },
+
+        "stats": {
+
+            "total_batches": len(classrooms),
+
+            "total_students": total_students,
+
+
+            "total_schedules": len(schedules),
+
+            "instructors": list(
+                instructor_names
+            )
+        },
+
+        "batches": batch_details,
+
+
+
+
+
+        "upcoming_sessions": [
+
+            {
+                "id": s.id,
+
+                "classroom_id": s.classroom_id,
+
+                "status": s.status,
+
+                "join_url": s.join_url,
+
+                "start_time": (
+                    s.start_time.isoformat()
+                    if s.start_time
+                    else None
+                ),
+
+                "end_time": (
+                    s.end_time.isoformat()
+                    if s.end_time
+                    else None
+                )
+            }
+
+            for s in upcoming_sessions
+        ]
     }
