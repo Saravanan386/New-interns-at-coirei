@@ -8,6 +8,7 @@ from app.utils.security import get_current_user
 from app.models.test import Test, Question, Option, TestSubmission, StudentAnswer
 from app.models.user import User
 from app.models.enrollment import Enrollment
+from app.models.classroom import Classroom
 from app.schemas import (
     TestCreate, TestResponse, TestUpdate,
     TestSubmitRequest,
@@ -112,7 +113,17 @@ def update_test(
         db_test.end_time = test_data.end_time
 
     if test_data.questions is not None:
-        db.query(Question).filter(Question.test_id == test_id).delete()
+        question_ids = [
+            question_id
+            for (question_id,) in db.query(Question.id)
+            .filter(Question.test_id == test_id)
+            .all()
+        ]
+        if question_ids:
+            db.query(Option).filter(Option.question_id.in_(question_ids)).delete()
+            db.query(Question).filter(Question.id.in_(question_ids)).delete()
+            db.flush()
+
         for q in test_data.questions:
             new_question = Question(test_id=test_id, text=q.text)
             db.add(new_question)
@@ -293,9 +304,13 @@ def get_test_details(
         raise HTTPException(status_code=404, detail="Test not found")
 
     # All students enrolled in the same course + batch as this test
-    enrollments = db.query(Enrollment).filter(
-        Enrollment.course_id == test.course_id,
-        Enrollment.batch_name == test.batch_name
+    enrollments = db.query(Enrollment).join(
+        Classroom,
+        Classroom.id == Enrollment.classroom_id
+    ).filter(
+        Classroom.course_id == test.course_id,
+        Classroom.batch_name == test.batch_name,
+        Enrollment.status == "ongoing"
     ).all()
 
     # Build a lookup: student_user_id → TestSubmission

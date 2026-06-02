@@ -26,6 +26,10 @@ router = APIRouter(
     prefix="/sessions",
     tags=["Sessions"]
 )
+from app.services.jitsi_auth import (
+    generate_room_name
+)
+
 
 # ---------------------------------------------------------------------------
 # ATTENDANCE SETTINGS
@@ -146,7 +150,9 @@ async def start_session(
         )
 
     # CREATE ROOM
-    room_name = f"classroom_{classroom.id}"
+    room_name = generate_room_name(
+        classroom.id
+    )
 
     room = create_room(room_name)
 
@@ -238,6 +244,7 @@ def get_active_session(
         "join_enabled": True,
         "session_id": session.id,
         "classroom_id": classroom_id,
+        "is_joined": participant is not None,
         "room_id": session.livekit_room_name,
         "meet_link": meet_link,
         "is_joined": participant is not None,
@@ -594,3 +601,88 @@ def session_history(
         })
 
     return result
+
+
+
+@router.post("/{session_id}/access")
+def get_session_access(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    
+    session = (
+        db.query(ClassSession)
+        .filter(
+            ClassSession.id == session_id,
+            ClassSession.status == "live"
+        )
+        .first()
+    )
+
+    if not session:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found"
+        )
+    if current_user["role"] == "student":
+
+        enrollment = (
+            db.query(Enrollment)
+            .filter(
+                Enrollment.user_id
+                == current_user["user_id"],
+
+                Enrollment.classroom_id
+                == session.classroom_id
+            )
+            .first()
+        )
+
+        if not enrollment:
+
+            raise HTTPException(
+                status_code=403,
+                detail="Student not enrolled"
+            )
+    if current_user["role"] == "instructor":
+
+        assignment = (
+            db.query(InstructorEnrollment)
+            .filter(
+                InstructorEnrollment.user_id
+                == current_user["user_id"],
+
+                InstructorEnrollment.classroom_id
+                == session.classroom_id
+            )
+            .first()
+        )
+
+        if not assignment:
+
+            raise HTTPException(
+                status_code=403,
+                detail="Instructor not assigned"
+            )
+    user = (
+        db.query(User)
+        .filter(
+            User.id == current_user["user_id"]
+        )
+        .first()
+    )
+
+    return {
+
+        "session_id": session.id,
+
+        "room_name": session.livekit_room_name,
+
+        "display_name": user.name,
+
+        "role": current_user["role"],
+
+        "domain": "meet.jit.si"
+    }

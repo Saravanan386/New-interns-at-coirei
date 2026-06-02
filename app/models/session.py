@@ -35,3 +35,6 @@ class ClassSession(Base):
     start_time = Column(DateTime)
 
     end_time = Column(DateTime)
+
+
+    
