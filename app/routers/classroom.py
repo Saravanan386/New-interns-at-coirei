@@ -110,3 +110,68 @@ def list_classrooms(
     classrooms = db.query(Classroom).all()
 
     return classrooms
+
+
+@router.get("/")
+def get_classrooms(
+    db: Session = Depends(get_db)
+):
+    return db.query(Classroom).all()
+
+
+@router.get("/{classroom_id}")
+def get_classroom(
+    classroom_id: int,
+    db: Session = Depends(get_db)
+):
+    classroom = (
+        db.query(Classroom)
+        .filter(Classroom.id == classroom_id)
+        .first()
+    )
+
+    if not classroom:
+        raise HTTPException(
+            status_code=404,
+            detail="Classroom not found"
+        )
+
+    return classroom
+
+
+@router.get("/course/{course_id}")
+def get_course_classrooms(
+    course_id: int,
+    db: Session = Depends(get_db)
+):
+    return (
+        db.query(Classroom)
+        .filter(Classroom.course_id == course_id)
+        .all()
+    )
+
+
+
+@router.delete("/{classroom_id}")
+def delete_classroom(
+    classroom_id: int,
+    db: Session = Depends(get_db)
+):
+    classroom = (
+        db.query(Classroom)
+        .filter(Classroom.id == classroom_id)
+        .first()
+    )
+
+    if not classroom:
+        raise HTTPException(
+            status_code=404,
+            detail="Classroom not found"
+        )
+
+    db.delete(classroom)
+    db.commit()
+
+    return {
+        "message": "Classroom deleted successfully"
+    }

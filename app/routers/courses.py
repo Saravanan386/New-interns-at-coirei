@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.utils.security import get_current_user
 from app.models.course import Course
 from app.models.enrollment import Enrollment
+from app.models.classroom import Classroom
 from app.schemas import (
     CourseCreate,
     CourseUpdate,
@@ -46,6 +47,62 @@ def get_my_courses(
 def list_courses(db: Session = Depends(get_db)):
     return db.query(Course).all()
 
+
+
+@router.get("/{course_id}")
+def get_course(
+    course_id: int,
+    db: Session = Depends(get_db)
+):
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id)
+        .first()
+    )
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    return course
+
+
+
+@router.get("/{course_id}/classrooms")
+def get_course_classrooms(
+    course_id: int,
+    db: Session = Depends(get_db)
+):
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id)
+        .first()
+    )
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    classrooms = (
+        db.query(Classroom)
+        .filter(Classroom.course_id == course_id)
+        .all()
+    )
+
+    return {
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "course_code": course.course_code,
+            "description": course.description
+        },
+        "classrooms": classrooms
+    }
+
 @router.get("/{course_id}/batches")
 def get_course_batches(course_id: int, db: Session = Depends(get_db)):
     from app.models.module import Module
@@ -57,7 +114,29 @@ def get_course_batches(course_id: int, db: Session = Depends(get_db)):
     
     return sorted(list(all_batches))
 
+@router.delete("/{course_id}")
+def delete_course(
+    course_id: int,
+    db: Session = Depends(get_db)
+):
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id)
+        .first()
+    )
 
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    db.delete(course)
+    db.commit()
+
+    return {
+        "message": "Course deleted successfully"
+    }
 
 @router.post(
     "/create",
