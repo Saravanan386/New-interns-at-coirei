@@ -154,18 +154,38 @@ def get_course_classrooms(
 
     return response
 
+
+
+
 @router.get("/{course_id}/batches")
-def get_course_batches(course_id: int, db: Session = Depends(get_db)):
-    from app.models.module import Module
-    enrollment_batches = db.query(Enrollment.batch_name).filter(Enrollment.course_id == course_id).distinct().all()
-    module_batches = db.query(Module.batch_name).filter(Module.course_id == course_id).distinct().all()
-    
-    all_batches = set([b[0] for b in enrollment_batches if b[0]])
-    all_batches.update([b[0] for b in module_batches if b[0]])
-    
-    return sorted(list(all_batches))
+def get_course_batches(
+    course_id: int,
+    db: Session = Depends(get_db)
+):
 
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
 
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    classrooms = db.query(Classroom).filter(
+        Classroom.course_id == course_id
+    ).all()
+
+    return [
+        {
+            "id": classroom.id,
+            "batch_name": classroom.batch_name,
+            "batch_code": classroom.batch_code,
+            "room_name": classroom.room_name
+        }
+        for classroom in classrooms
+    ]
 
 @router.delete("/{course_id}")
 def delete_course(
