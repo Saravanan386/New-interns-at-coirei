@@ -22,8 +22,6 @@ class CourseSchedule(Base):
     start_time = Column(String)
     end_time = Column(String)
 
-    start_date = Column(Date)
-
     instructor_name = Column(String)
 
     topic = Column(String)
