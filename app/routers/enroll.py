@@ -125,86 +125,111 @@ def enroll_student(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    # Only instructor or admin can enroll students
-    if current_user.get("role") not in ["instructor", "admin"]:
-        raise HTTPException(status_code=403, detail="Only instructors can enroll students")
 
-    # Check course exists
-    course = db.query(Course).filter(Course.id == course_id).first()
+    if current_user.get("role") not in ["admin", "instructor"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only instructors can enroll students"
+        )
+
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
+
     if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
 
-    # Validate batch belongs to the course
-    valid_batch = (
-        db.query(Classroom)
-        .filter(Classroom.course_id == course_id, Classroom.batch_name == batch_name)
-        .first()
-    )
+    valid_batch = db.query(Classroom).filter(
+        Classroom.course_id == course_id,
+        Classroom.batch_name == batch_name
+    ).first()
+
     if not valid_batch:
         raise HTTPException(
             status_code=400,
-            detail=f"Batch '{batch_name}' does not exist for this course. Use GET /enroll/batches to see available batches."
+            detail=f"Batch '{batch_name}' does not exist for this course"
         )
 
-    # Check email not already taken
-    existing_user = db.query(User).filter(User.email == email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    existing_user = db.query(User).filter(
+        User.email == email
+    ).first()
 
-    # Check not already enrolled in same course+batch
+    raw_password = None
+
     if existing_user:
-        already_enrolled = (
-            db.query(Enrollment)
-            .filter(
-                Enrollment.user_id == existing_user.id,
-                Enrollment.classroom_id == valid_batch.id
+
+        if existing_user.role != "student":
+            raise HTTPException(
+                status_code=400,
+                detail="This email belongs to a non-student account"
             )
-            .first()
+
+        user = existing_user
+
+    else:
+
+        student_id = generate_student_id(
+            course.name,
+            db
         )
-        if already_enrolled:
-            raise HTTPException(status_code=400, detail="Student already enrolled in this batch")
 
-    # Auto-generate student ID and password
-    student_id = generate_student_id(course.name, db)
-    raw_password = generate_password()
-    full_name = f"{first_name} {last_name}"
+        raw_password = generate_password()
 
-    # Create user
-    user = User(
-        name=full_name,
-        email=email,
-        password_hash=hash_password(raw_password),
-        role="student",
-        student_id=student_id
-    )
-    db.add(user)
-    db.flush()   # get user.id without committing
+        user = User(
+            name=f"{first_name} {last_name}",
+            email=email,
+            password_hash=hash_password(raw_password),
+            role="student",
+            student_id=student_id
+        )
 
-        # Create enrollment
+        db.add(user)
+        db.flush()
+
+    already_enrolled = db.query(
+        Enrollment
+    ).filter(
+        Enrollment.user_id == user.id,
+        Enrollment.classroom_id == valid_batch.id
+    ).first()
+
+    if already_enrolled:
+        raise HTTPException(
+            status_code=400,
+            detail="Student already enrolled in this batch"
+        )
+
     enrollment = Enrollment(
-    user_id=user.id,
-    classroom_id=valid_batch.id,
-    status="ongoing",
-    progress_percent=0
-)
+        user_id=user.id,
+        classroom_id=valid_batch.id,
+        progress_percent=0,
+        status="ongoing"
+    )
+
     db.add(enrollment)
+
     db.commit()
+
     db.refresh(user)
     db.refresh(enrollment)
 
     return {
         "message": "Student enrolled successfully",
-        "student_id": student_id,
         "user_id": user.id,
-        "name": full_name,
-        "email": email,
-        "auto_generated_password": raw_password,   # ← share this with the student
+        "student_id": user.student_id,
+        "name": user.name,
+        "email": user.email,
         "course": course.name,
         "batch_name": batch_name,
         "enrollment_id": enrollment.id,
-        "classroom_id": valid_batch.id
-    }
+        "classroom_id": valid_batch.id,
 
+        # only present when a new account is created
+        "auto_generated_password": raw_password
+    }
 
 # ---------------------------------------------------------------------------
 # POST /enroll/reset-password  — generate a new password for a student
