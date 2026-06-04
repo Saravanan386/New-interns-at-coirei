@@ -16,6 +16,8 @@ from app.schemas import (
     SubmissionReviewResponse, AnswerReviewItem,
 )
 
+from app.models.module import Module
+
 router = APIRouter(prefix="/tests", tags=["Tests"])
 
 PASS_THRESHOLD = 60.0  # percentage needed to pass
@@ -63,15 +65,25 @@ def create_test(
     current_user: dict = Depends(get_current_user)
 ):
     check_instructor(current_user)
+    module = db.query(Module).filter(
+        Module.id == test.module_id,
+        Module.course_id == test.course_id
+    ).first()
 
+    if not module:
+        raise HTTPException(
+            status_code=404,
+            detail="Module not found"
+        )
     new_test = Test(
         title=test.title,
         course_id=test.course_id,
         batch_name=test.batch_name,
-        module_name=test.module_name,
+        module_id=test.module_id,
         description=test.description,
         start_time=test.start_time,
-        end_time=test.end_time
+        end_time=test.end_time,
+        created_by=current_user["user_id"]
     )
     db.add(new_test)
     db.flush()
@@ -175,7 +187,7 @@ def start_test(
     submission = TestSubmission(
         test_id=test_id,
         student_user_id=student_user_id,
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
         status="in_progress"
     )
     db.add(submission)
@@ -241,7 +253,10 @@ def submit_test(
             Question.test_id == test_id
         ).first()
         if not question:
-            continue  # skip invalid question ids
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid question id {answer.question_id}"
+            )
 
         selected_opt = None
         if answer.selected_option_id:
@@ -263,7 +278,7 @@ def submit_test(
     score = (correct_count / total_questions * 100) if total_questions > 0 else 0.0
     is_passed = score >= PASS_THRESHOLD
 
-    submission.submitted_at = datetime.utcnow()
+    submission.submitted_at = datetime.now(timezone.utc)
     submission.score = round(score, 2)
     submission.is_passed = is_passed
     submission.status = "submitted"
@@ -365,7 +380,7 @@ def get_test_details(
     return TestDetailResponse(
         test_id=test.id,
         title=test.title,
-        module_name=test.module_name,
+        module_name=test.module.title if test.module else None,
         date=fmt_date(test.start_time),
         duration_minutes=duration_minutes(test.start_time, test.end_time),
         start_time=fmt_time(test.start_time),

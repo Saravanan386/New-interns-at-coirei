@@ -1,6 +1,6 @@
 # app/models/test.py
 
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Float
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -13,11 +13,22 @@ class Test(Base):
     description = Column(String, nullable=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     batch_name = Column(String, nullable=False)
-    module_name = Column(String, nullable=False)
+    module_id = Column(
+        Integer,
+        ForeignKey("modules.id"),
+        nullable=False
+    )
+
+    module = relationship("Module")
+
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    created_by = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
     # Relationships
     course = relationship("Course")
     questions = relationship("Question", back_populates="test", cascade="all, delete-orphan")
@@ -65,7 +76,13 @@ class TestSubmission(Base):
     test = relationship("Test", back_populates="submissions")
     student = relationship("User")
     answers = relationship("StudentAnswer", back_populates="submission", cascade="all, delete-orphan")
-
+    __table_args__ = (
+        UniqueConstraint(
+            "test_id",
+            "student_user_id",
+            name="uq_test_student"
+        ),
+    )
 
 class StudentAnswer(Base):
     """The option a student selected for each question in a submission."""

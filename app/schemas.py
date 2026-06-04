@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from pydantic import Field
 
 # ── Notification Schemas ──────────────────────────────────────────────────────
 
@@ -47,8 +48,8 @@ class ModuleResponse(BaseModel):
     course_id: int
     batch_name: Optional[str]
     
-    chapters: List[ChapterResponse] = []
 
+    chapters: List[ChapterResponse] = Field(default_factory=list)
     class Config:
         orm_mode = True
 
@@ -81,7 +82,7 @@ class TestCreate(BaseModel):
     title: str
     course_id: int
     batch_name: str
-    module_name: str
+    module_id: int
     description: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -99,12 +100,12 @@ class TestResponse(BaseModel):
     description: Optional[str]
     course_id: int
     batch_name: str
-    module_name: str
+    module_id: int
     start_time: Optional[datetime]
     end_time: Optional[datetime]
     created_at: datetime
     
-    questions: List[QuestionResponse] = []
+    questions: List[QuestionResponse] = Field(default_factory=list)
 
     class Config:
         orm_mode = True
@@ -206,7 +207,7 @@ class AssignmentCreate(BaseModel):
     """Step 2 form fields (Step 1 fields come as query params or form)."""
     course_id: int
     batch_name: str
-    module_name: str
+    module_id: str
     title: str
     description: Optional[str] = None
     expected_outcome: Optional[str] = None
@@ -224,13 +225,13 @@ class AssignmentResponse(BaseModel):
     id: int
     course_id: int
     batch_name: str
-    module_name: str
+    module_name: Optional[str] = None
     title: str
     description: Optional[str]
     expected_outcome: Optional[str]
     due_date: Optional[datetime]
     created_at: datetime
-    resources: List[AssignmentResourceResponse] = []
+    resources: List[AssignmentResourceResponse] = Field(default_factory=list)
 
     class Config:
         orm_mode = True
@@ -340,7 +341,7 @@ class ChatPostResponse(BaseModel):
     reply_count: int
     is_liked_by_me: bool       # whether the requesting user has liked this post
     is_bookmarked_by_me: bool  # whether the requesting user bookmarked this
-    replies: List[ChatReplyResponse] = []
+    replies: List[ChatReplyResponse]= Field(default_factory=list)
 
     class Config:
         orm_mode = True
@@ -503,26 +504,6 @@ class ClassroomCreate(BaseModel):
 
 
 
-
-
-
-
-class ClassroomCreate(BaseModel):
-    course_id: int
-    batch_name: str
-    room_name: str
-
-    schedule_type: Optional[str] = None
-
-    class_days: List[str]
-
-    start_time: str
-    end_time: str
-
-    start_month: Optional[str] = None
-
-    instructor_id: Optional[int] = None
-
 # ----------  courses --------
 
 
@@ -650,5 +631,16 @@ class RegistrationResponse(BaseModel):
 
 
 
+class ChapterResourceResponse(BaseModel):
+    id: int
+    chapter_id: int
+    file_name: str
+    file_path: str
+    file_size: str | None
+    uploaded_at: datetime
 
-#
+    class Config:
+        from_attributes = True
+
+
+

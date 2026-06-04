@@ -16,7 +16,7 @@ class Assignment(Base):
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     batch_name = Column(String, nullable=False)
-    module_name = Column(String, nullable=False)          # free-text module label
+    module_id = Column(Integer, nullable=False)          # free-text module label
 
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)

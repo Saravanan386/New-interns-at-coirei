@@ -10,7 +10,8 @@ from app.models import (
     instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, 
     group_chat as group_chat_model, registration_profile as registration_profile_model
 )
-
+from app.models.module import Module, Chapter
+from app.models.chapter_resources import ChapterResource
 from app.routers import (
     auth,
     meet,
@@ -21,6 +22,7 @@ from app.routers import (
     admin_dashboard,
     student_dashboard,
     instructor_dashboard,
+    chapter_resourses,
     dashboard,
     classes,
     class_scores, # From New
@@ -89,6 +91,9 @@ app.include_router(classes.router)
 app.include_router(class_scores.router)         # From New
 app.include_router(assignments.router)
 app.include_router(resources.router)
+app.include_router(chapter_resourses.router)
+
+
 app.include_router(sessions.router)
 app.include_router(courses.router)
 app.include_router(student.router)              # From New

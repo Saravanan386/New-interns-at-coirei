@@ -135,7 +135,7 @@ def create_assignment(
     # ── Assignment fields sent as form values ──
     course_id: int = Form(...),
     batch_name: str = Form(...),
-    module_name: str = Form(...),
+    module_id: int = Form(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
     expected_outcome: Optional[str] = Form(None),
@@ -154,7 +154,16 @@ def create_assignment(
       POST /assignments/{id}/resources
     """
     require_instructor(current_user)
+    module = db.query(Module).filter(
+        Module.id == module_id,
+        Module.course_id == course_id
+    ).first()
 
+    if not module:
+        raise HTTPException(
+            status_code=404,
+            detail="Module not found"
+        )
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -183,7 +192,7 @@ def create_assignment(
     new_assignment = Assignment(
         course_id=course_id,
         batch_name=batch_name,
-        module_name=module_name,
+        module_id= module_id,
         title=title,
         description=description,
         expected_outcome=expected_outcome,
@@ -221,11 +230,16 @@ def create_assignment(
         db.refresh(new_assignment)
 
     # ── Fan-out: notify every enrolled student in this batch ──────────────────
-    enrolled_students = db.query(Enrollment).filter(
-        Enrollment.course_id == course_id,
-        Enrollment.batch_name == batch_name,
-        Enrollment.status == "ongoing",
-    ).all()
+    enrolled_students = (
+        db.query(Enrollment)
+        .join(Classroom, Classroom.id == Enrollment.classroom_id)
+        .filter(
+            Classroom.course_id == course_id,
+            Classroom.batch_name == batch_name,
+            Enrollment.status == "ongoing"
+        )
+        .all()
+)
 
     for enrollment in enrolled_students:
         create_notification(
@@ -496,7 +510,7 @@ def student_dashboard_assignments(
     """
     require_student(current_user)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Collect all active enrollments for this student
     enrollments = db.query(Enrollment).filter(
@@ -555,12 +569,12 @@ def student_dashboard_assignments(
 
             # ── Course code = first whitespace-free token of name ──
             course_code = course.name.split()[0] if course.name else ""
-
+            module_name=a.module.title if a.module else None
             cards.append(StudentDashboardAssignmentItem(
                 assignment_id=a.id,
                 course_code=course_code,
                 course_name=course.name,
-                module_name=a.module_name,
+                module_name= module_name,
                 title=a.title,
                 due_date=formatted_date,
                 due_time=formatted_time,
@@ -594,11 +608,16 @@ def submit_assignment(
         raise HTTPException(status_code=404, detail="Assignment not found")
 
     # Verify student is enrolled in the correct batch
-    enrollment = db.query(Enrollment).filter(
-        Enrollment.user_id == current_user["user_id"],
-        Enrollment.course_id == assignment.course_id,
-        Enrollment.batch_name == assignment.batch_name
-    ).first()
+    enrollment = (
+        db.query(Enrollment)
+        .join(Classroom, Classroom.id == Enrollment.classroom_id)
+        .filter(
+            Enrollment.user_id == current_user["user_id"],
+            Classroom.course_id == assignment.course_id,
+            Classroom.batch_name == assignment.batch_name
+        )
+        .first()
+    )
     if not enrollment:
         raise HTTPException(status_code=403, detail="Not enrolled in this assignment's batch.")
 
@@ -614,7 +633,7 @@ def submit_assignment(
         folder = os.path.join(UPLOAD_DIR, f"{assignment_id}_submissions")
         os.makedirs(folder, exist_ok=True)
         ext = os.path.splitext(file.filename)[1]
-        unique_name = f"{current_user['id']}_{uuid.uuid4().hex}{ext}"
+        unique_name = f"{current_user['user_id']}_{uuid.uuid4().hex}{ext}"
         dest = os.path.join(folder, unique_name)
         with open(dest, "wb") as f_out:
             shutil.copyfileobj(file.file, f_out)
@@ -625,7 +644,7 @@ def submit_assignment(
         sub.submission_text = submission_text
         sub.file_path = saved_path or sub.file_path
         sub.file_name = saved_name or sub.file_name
-        sub.submitted_at = datetime.utcnow()
+        sub.submitted_at = datetime.now(timezone.utc)
         sub.status = "submitted"
     else:
         sub = AssignmentSubmission(
@@ -634,7 +653,7 @@ def submit_assignment(
             submission_text=submission_text,
             file_path=saved_path,
             file_name=saved_name,
-            submitted_at=datetime.utcnow(),
+            submitted_at=datetime.now(timezone.utc),
             status="submitted"
         )
         db.add(sub)
