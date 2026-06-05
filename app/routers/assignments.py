@@ -476,7 +476,6 @@ def my_assignments(
     assignments = []
     for en in enrollments:
         batch_assignments = db.query(Assignment).filter(
-            Course.course_id == en.course_id,
             Assignment.batch_name == en.batch_name
         ).order_by(Assignment.created_at.desc()).all()
         assignments.extend(batch_assignments)
