@@ -30,3 +30,6 @@ PyJWT==2.8.0
 
 # Timezone data (required for zoneinfo on Windows/Linux deployments)
 tzdata
+
+
+rapidfuzz
