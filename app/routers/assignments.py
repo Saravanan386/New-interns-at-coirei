@@ -475,11 +475,27 @@ def my_assignments(
 
     assignments = []
     for en in enrollments:
-        batch_assignments = db.query(Assignment).filter(
-            Assignment.batch_name == en.batch_name
-        ).order_by(Assignment.created_at.desc()).all()
-        assignments.extend(batch_assignments)
 
+        classroom = (
+            db.query(Classroom)
+            .filter(Classroom.id == en.classroom_id)
+            .first()
+        )
+
+        if not classroom:
+            continue
+
+        batch_assignments = (
+            db.query(Assignment)
+            .filter(
+                Assignment.course_id == classroom.course_id,
+                Assignment.batch_name == classroom.batch_name
+            )
+            .order_by(Assignment.created_at.desc())
+            .all()
+        )
+
+        assignments.extend(batch_assignments)
     return assignments
 
 
