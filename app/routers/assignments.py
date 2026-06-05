@@ -138,6 +138,7 @@ def create_assignment(
     module_id: int = Form(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
+    objective: Optional[str] = Form(None),
     expected_outcome: Optional[str] = Form(None),
     due_date: Optional[str] = Form(None),          # ISO-8601 string, parsed below
     # ── Optional resource files uploaded at the same time ──
@@ -195,6 +196,7 @@ def create_assignment(
         module_id= module_id,
         title=title,
         description=description,
+        objective=objective,
         expected_outcome=expected_outcome,
         due_date=parsed_due_date,
         created_by=current_user["user_id"],
@@ -714,4 +716,151 @@ def grade_submission(
         "submission_id": sub.id,
         "grade": sub.grade,
         "feedback": sub.feedback
+    }
+from fastapi.responses import FileResponse
+
+@router.get("/{assignment_id}/resources")
+def get_assignment_resources(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    assignment = (
+        db.query(Assignment)
+        .filter(Assignment.id == assignment_id)
+        .first()
+    )
+
+    if not assignment:
+        raise HTTPException(
+            status_code=404,
+            detail="Assignment not found"
+        )
+
+    resources = (
+        db.query(AssignmentResource)
+        .filter(
+            AssignmentResource.assignment_id == assignment_id
+        )
+        .all()
+    )
+
+    return {
+        "assignment_id": assignment.id,
+        "title": assignment.title,
+        "resource_count": len(resources),
+        "resources": [
+            {
+                "resource_id": r.id,
+                "file_name": r.file_name,
+                "file_type": r.file_type,
+                "download_url": f"/assignments/resources/{r.id}/download"
+            }
+            for r in resources
+        ]
+    }
+
+from fastapi.responses import FileResponse
+
+@router.get("/resources/{resource_id}/download")
+def download_assignment_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    resource = (
+        db.query(AssignmentResource)
+        .filter(
+            AssignmentResource.id == resource_id
+        )
+        .first()
+    )
+
+    if not resource:
+        raise HTTPException(
+            status_code=404,
+            detail="Resource not found"
+        )
+
+    if not os.path.exists(resource.file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="File missing from server"
+        )
+
+    return FileResponse(
+        path=resource.file_path,
+        filename=resource.file_name,
+        media_type=resource.file_type
+    )
+
+@router.get("/resources/{resource_id}/view")
+def view_assignment_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    resource = (
+        db.query(AssignmentResource)
+        .filter(
+            AssignmentResource.id == resource_id
+        )
+        .first()
+    )
+
+    if not resource:
+        raise HTTPException(
+            status_code=404,
+            detail="Resource not found"
+        )
+
+    return FileResponse(
+        resource.file_path,
+        media_type=resource.file_type
+    )
+
+@router.get("/{assignment_id}/details")
+def assignment_details(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    assignment = (
+        db.query(Assignment)
+        .filter(Assignment.id == assignment_id)
+        .first()
+    )
+
+    if not assignment:
+        raise HTTPException(
+            status_code=404,
+            detail="Assignment not found"
+        )
+
+    resources = (
+        db.query(AssignmentResource)
+        .filter(
+            AssignmentResource.assignment_id == assignment_id
+        )
+        .all()
+    )
+
+    return {
+        "assignment_id": assignment.id,
+        "title": assignment.title,
+        "description": assignment.description,
+        "objective": assignment.objective,
+        "expected_outcome": assignment.expected_outcome,
+        "due_date": assignment.due_date,
+        "module_name": assignment.module.title if assignment.module else None,
+        "resources": [
+            {
+                "resource_id": r.id,
+                "file_name": r.file_name,
+                "file_type": r.file_type,
+                "view_url": f"/assignments/resources/{r.id}/view",
+                "download_url": f"/assignments/resources/{r.id}/download"
+            }
+            for r in resources
+        ]
     }

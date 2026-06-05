@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
+
 from datetime import datetime
 from pydantic import Field
 
@@ -22,17 +23,25 @@ class NotificationResponse(BaseModel):
 # Chapters
 class ChapterCreate(BaseModel):
     title: str
-    order: Optional[int] = 1
+    order: int = 1
+
+    class_content: Optional[str] = None
+
+    key_topics: Optional[str] = None
 
 class ChapterResponse(BaseModel):
     id: int
     title: str
     order: int
+
+    class_content: Optional[str] = None
+
+    key_topics: Optional[str] = None
+
     module_id: int
 
     class Config:
-        orm_mode = True
-
+        from_attributes = True
 # Modules
 class ModuleCreate(BaseModel):
     title: str
@@ -54,140 +63,6 @@ class ModuleResponse(BaseModel):
         orm_mode = True
 
 # Tests
-class OptionCreate(BaseModel):
-    text: str
-    is_correct: bool = False
-
-class OptionResponse(BaseModel):
-    id: int
-    text: str
-    is_correct: bool
-
-    class Config:
-        orm_mode = True
-
-class QuestionCreate(BaseModel):
-    text: str
-    options: List[OptionCreate]
-
-class QuestionResponse(BaseModel):
-    id: int
-    text: str
-    options: List[OptionResponse]
-
-    class Config:
-        orm_mode = True
-
-class TestCreate(BaseModel):
-    title: str
-    course_id: int
-    batch_name: str
-    module_id: int
-    description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    questions: Optional[List[QuestionCreate]] = None
-
-class TestUpdate(BaseModel):
-    description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    questions: Optional[List[QuestionCreate]] = None
-
-class TestResponse(BaseModel):
-    id: int
-    title: str
-    description: Optional[str]
-    course_id: int
-    batch_name: str
-    module_id: int
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
-    created_at: datetime
-    
-    questions: List[QuestionResponse] = Field(default_factory=list)
-
-    class Config:
-        orm_mode = True
-
-
-# ── Submission Schemas ───────────────────────────────────────────────────────
-
-class StudentAnswerCreate(BaseModel):
-    """One answer entry when a student submits a test."""
-    question_id: int
-    selected_option_id: Optional[int] = None   # null = skipped
-
-
-class TestSubmitRequest(BaseModel):
-    """Body for POST /tests/{test_id}/submit"""
-    answers: List[StudentAnswerCreate]
-
-
-# ── Instructor View Schemas ──────────────────────────────────────────────────
-
-class StudentRowResponse(BaseModel):
-    """One row in the instructor's student table."""
-    sno: int
-    student_id: str           # e.g. 'BT011'
-    student_name: str
-    start_time: Optional[str]  # formatted string or '---'
-    end_time: Optional[str]    # formatted string or '---'
-    status: str                # 'submitted' | 'not_attended' | 'in_progress'
-    mark: Optional[float]      # score (0–100) or null
-    submission_id: Optional[int]
-
-    class Config:
-        orm_mode = True
-
-
-class TestDetailResponse(BaseModel):
-    """Full instructor real-time view for GET /tests/{test_id}/details"""
-    test_id: int
-    title: str
-    module_name: str
-    date: Optional[str]          # formatted date string
-    duration_minutes: Optional[int]
-    start_time: Optional[str]
-    end_time: Optional[str]
-    total_enrolled: int
-    total_submitted: int
-    total_passed: int
-    total_failed: int
-    students: List[StudentRowResponse]
-
-
-# ── Submission Review Schemas ────────────────────────────────────────────────
-
-class AnswerReviewItem(BaseModel):
-    """Per-question review row for GET /tests/{test_id}/submission/{id}"""
-    question_id: int
-    question_text: str
-    selected_option_id: Optional[int]
-    selected_option_text: Optional[str]
-    is_correct: Optional[bool]
-    correct_option_text: Optional[str]
-
-    class Config:
-        orm_mode = True
-
-
-class SubmissionReviewResponse(BaseModel):
-    """Full review of one student's submission."""
-    submission_id: int
-    test_id: int
-    student_id: str
-    student_name: str
-    started_at: Optional[datetime]
-    submitted_at: Optional[datetime]
-    score: Optional[float]
-    is_passed: Optional[bool]
-    status: str
-    answers: List[AnswerReviewItem]
-
-
-    class Config:
-        orm_mode = True
 
 
 # ── Assignment Schemas ────────────────────────────────────────────────────────
@@ -644,3 +519,306 @@ class ChapterResourceResponse(BaseModel):
 
 
 
+
+
+
+# --------------------------------------------------
+# OPTION
+# --------------------------------------------------
+
+class OptionCreate(BaseModel):
+    text: str
+    is_correct: bool = False
+
+
+class OptionResponse(BaseModel):
+    id: int
+    text: str
+
+    class Config:
+        from_attributes = True
+
+
+# --------------------------------------------------
+# QUESTION
+# --------------------------------------------------
+
+class QuestionCreate(BaseModel):
+    text: str
+
+    question_type: Literal[
+        "mcq",
+        "checkbox",
+        "short_answer",
+        "long_answer"
+    ]
+
+    marks: float
+
+    expected_answer: Optional[str] = None
+
+    options: List[OptionCreate] = []
+
+
+class QuestionResponse(BaseModel):
+    id: int
+    text: str
+    question_type: str
+    marks: float
+
+    options: List[OptionResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+# --------------------------------------------------
+# CREATE TEST
+# --------------------------------------------------
+
+class TestCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+    course_id: int
+    module_id: int
+
+    batch_name: str
+
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+    questions: List[QuestionCreate]
+
+
+class TestResponse(BaseModel):
+    id: int
+    title: str
+
+    class Config:
+        from_attributes = True
+
+
+
+from typing import List, Optional
+from pydantic import BaseModel
+
+
+class StudentAnswerInput(BaseModel):
+
+    question_id: int
+
+    # MCQ
+    selected_option_id: Optional[int] = None
+
+    # Checkbox
+    selected_option_ids: Optional[List[int]] = None
+
+    # Text questions
+    text_answer: Optional[str] = None
+
+
+class TestSubmitRequest(BaseModel):
+
+    answers: List[StudentAnswerInput]
+
+
+class TestSubmitResponse(BaseModel):
+
+    submission_id: int
+
+    obtained_marks: float
+
+    total_marks: float
+
+    percentage: float
+
+    is_passed: bool
+
+class EvaluationResult(BaseModel):
+
+    awarded_marks: float
+
+    max_marks: float
+
+    is_correct: Optional[bool] = None
+
+    feedback: Optional[str] = None
+
+# Add these Test Schemas to schemas.py
+
+from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel
+
+class TestUpdate(BaseModel):
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    questions: Optional[List[QuestionCreate]] = None
+
+# ------------------------------
+
+# Student Test Detail View
+
+# ------------------------------
+
+class StudentRowResponse(BaseModel):
+    sno: int
+    student_id: str
+    student_name: str
+
+
+    start_time: Optional[str]
+    end_time: Optional[str]
+
+    status: str
+
+    mark: Optional[float]
+
+    submission_id: Optional[int]
+
+    class Config:
+        orm_mode = True
+
+
+class TestDetailResponse(BaseModel):
+
+
+    test_id: int
+
+    title: str
+
+    module_name: Optional[str]
+
+    date: Optional[str]
+
+    duration_minutes: Optional[int]
+
+    start_time: Optional[str]
+
+    end_time: Optional[str]
+
+    total_enrolled: int
+
+    total_submitted: int
+
+    total_passed: int
+
+    total_failed: int
+
+    students: List[StudentRowResponse]
+
+    class Config:
+        orm_mode = True
+
+
+# ------------------------------
+
+# Submission Review
+
+# ------------------------------
+
+class AnswerReviewItem(BaseModel):
+
+
+    question_id: int
+
+    question_text: str
+
+    selected_option_id: Optional[int]
+
+    selected_option_text: Optional[str]
+
+    is_correct: Optional[bool]
+
+    correct_option_text: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+
+class SubmissionReviewResponse(BaseModel):
+
+
+    submission_id: int
+
+    test_id: int
+
+    student_id: str
+
+    student_name: str
+
+    started_at: Optional[datetime]
+
+    submitted_at: Optional[datetime]
+
+    score: Optional[float]
+
+    is_passed: Optional[bool]
+
+    status: str
+
+    answers: List[AnswerReviewItem]
+
+    class Config:
+        orm_mode = True
+
+class AnswerReviewItem(BaseModel):
+
+    question_id: int
+
+    question_text: str
+
+    question_type: str
+
+    student_answer: Optional[str]
+
+    expected_answer: Optional[str]
+
+    awarded_marks: float
+
+    max_marks: float
+
+    feedback: Optional[str]
+
+class AnswerReviewItem(BaseModel):
+
+    question_id: int
+    question_text: str
+    question_type: str
+
+    student_answer: Optional[str]
+    expected_answer: Optional[str]
+
+    awarded_marks: float
+    max_marks: float
+
+    feedback: Optional[str]
+
+
+class SubmissionReviewResponse(BaseModel):
+
+    submission_id: int
+
+    test_id: int
+
+    student_id: str
+
+    student_name: str
+
+    started_at: Optional[datetime]
+
+    submitted_at: Optional[datetime]
+
+    obtained_marks: float
+
+    total_marks: float
+
+    percentage: float
+
+    is_passed: bool
+
+    status: str
+
+    answers: List[AnswerReviewItem]

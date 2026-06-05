@@ -46,6 +46,11 @@ class Chapter(Base):
 
     order = Column(Integer, default=1)
 
+    # NEW FIELDS
+    class_content = Column(String, nullable=True)
+
+    key_topics = Column(String, nullable=True)
+
     module_id = Column(
         Integer,
         ForeignKey("modules.id", ondelete="CASCADE"),
@@ -56,6 +61,7 @@ class Chapter(Base):
         "Module",
         back_populates="chapters"
     )
+
     resources = relationship(
         "ChapterResource",
         back_populates="chapter",

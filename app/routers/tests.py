@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import Optional
 
+import re
+from app.services.test_evaluator import evaluate_question
 from app.database import get_db
 from app.utils.security import get_current_user
 from app.models.test import Test, Question, Option, TestSubmission, StudentAnswer
@@ -13,9 +15,9 @@ from app.schemas import (
     TestCreate, TestResponse, TestUpdate,
     TestSubmitRequest,
     TestDetailResponse, StudentRowResponse,
-    SubmissionReviewResponse, AnswerReviewItem,
+    SubmissionReviewResponse, AnswerReviewItem,TestSubmitResponse,SubmissionReviewResponse
 )
-
+from rapidfuzz import fuzz
 from app.models.module import Module
 
 router = APIRouter(prefix="/tests", tags=["Tests"])
@@ -65,6 +67,7 @@ def create_test(
     current_user: dict = Depends(get_current_user)
 ):
     check_instructor(current_user)
+
     module = db.query(Module).filter(
         Module.id == test.module_id,
         Module.course_id == test.course_id
@@ -75,32 +78,49 @@ def create_test(
             status_code=404,
             detail="Module not found"
         )
+
     new_test = Test(
         title=test.title,
-        course_id=test.course_id,
-        batch_name=test.batch_name,
-        module_id=test.module_id,
         description=test.description,
+        course_id=test.course_id,
+        module_id=test.module_id,
+        batch_name=test.batch_name,
         start_time=test.start_time,
         end_time=test.end_time,
         created_by=current_user["user_id"]
     )
+
     db.add(new_test)
     db.flush()
 
-    if test.questions:
-        for q in test.questions:
-            new_question = Question(test_id=new_test.id, text=q.text)
-            db.add(new_question)
-            db.flush()
-            for o in q.options:
-                new_option = Option(question_id=new_question.id, text=o.text, is_correct=o.is_correct)
-                db.add(new_option)
+    for q in test.questions:
+
+        question = Question(
+            test_id=new_test.id,
+            text=q.text,
+            question_type=q.question_type,
+            marks=q.marks,
+            expected_answer=q.expected_answer
+        )
+
+        db.add(question)
+        db.flush()
+
+        if q.question_type in ["mcq", "checkbox"]:
+
+            for option in q.options:
+                db.add(
+                    Option(
+                        question_id=question.id,
+                        text=option.text,
+                        is_correct=option.is_correct
+                    )
+                )
 
     db.commit()
     db.refresh(new_test)
-    return new_test
 
+    return new_test
 
 # ── Existing: Update Test ────────────────────────────────────────────────────
 
@@ -137,7 +157,13 @@ def update_test(
             db.flush()
 
         for q in test_data.questions:
-            new_question = Question(test_id=test_id, text=q.text)
+            new_question = Question(
+                test_id=test_id,
+                text=q.text,
+                question_type=q.question_type,
+                marks=q.marks,
+                expected_answer=q.expected_answer
+            )
             db.add(new_question)
             db.flush()
             for o in q.options:
@@ -203,98 +229,6 @@ def start_test(
 
 # ── Student: Submit Test ─────────────────────────────────────────────────────
 
-@router.post("/{test_id}/submit")
-def submit_test(
-    test_id: int,
-    payload: TestSubmitRequest,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Student submits answers. Auto-grades the test.
-    Score = (correct answers / total questions) * 100.
-    Pass if score >= PASS_THRESHOLD (60%).
-    """
-    check_student(current_user)
-
-    test = db.query(Test).filter(Test.id == test_id).first()
-    if not test:
-        raise HTTPException(status_code=404, detail="Test not found")
-
-    student_user_id = current_user["user_id"]
-
-    submission = db.query(TestSubmission).filter(
-        TestSubmission.test_id == test_id,
-        TestSubmission.student_user_id == student_user_id
-    ).first()
-
-    if not submission:
-        raise HTTPException(
-            status_code=400,
-            detail="You must call POST /tests/{test_id}/start before submitting."
-        )
-
-    if submission.status == "submitted":
-        raise HTTPException(status_code=400, detail="Test already submitted.")
-
-    # Delete any prior partial answers before saving final answers
-    db.query(StudentAnswer).filter(
-        StudentAnswer.submission_id == submission.id
-    ).delete()
-
-    # Save answers
-    total_questions = len(test.questions)
-    correct_count = 0
-
-    for answer in payload.answers:
-        # Validate question belongs to test
-        question = db.query(Question).filter(
-            Question.id == answer.question_id,
-            Question.test_id == test_id
-        ).first()
-        if not question:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid question id {answer.question_id}"
-            )
-
-        selected_opt = None
-        if answer.selected_option_id:
-            selected_opt = db.query(Option).filter(
-                Option.id == answer.selected_option_id,
-                Option.question_id == answer.question_id
-            ).first()
-            if selected_opt and selected_opt.is_correct:
-                correct_count += 1
-
-        student_answer = StudentAnswer(
-            submission_id=submission.id,
-            question_id=answer.question_id,
-            selected_option_id=answer.selected_option_id if selected_opt else None
-        )
-        db.add(student_answer)
-
-    # Calculate score
-    score = (correct_count / total_questions * 100) if total_questions > 0 else 0.0
-    is_passed = score >= PASS_THRESHOLD
-
-    submission.submitted_at = datetime.now(timezone.utc)
-    submission.score = round(score, 2)
-    submission.is_passed = is_passed
-    submission.status = "submitted"
-
-    db.commit()
-    db.refresh(submission)
-
-    return {
-        "message": "Test submitted successfully",
-        "submission_id": submission.id,
-        "score": submission.score,
-        "is_passed": submission.is_passed,
-        "correct": correct_count,
-        "total": total_questions
-    }
-
 
 # ── Instructor: Real-Time Test Details ──────────────────────────────────────
 
@@ -351,7 +285,7 @@ def get_test_details(
             status_str = "submitted"
             start_str = fmt_time(sub.started_at)
             end_str = fmt_time(sub.submitted_at)
-            mark = sub.score
+            mark = sub.score_percentage
             sub_id = sub.id
         elif sub and sub.status == "in_progress":
             status_str = "in_progress"
@@ -395,71 +329,568 @@ def get_test_details(
 
 # ── Instructor: Review One Student's Submission ──────────────────────────────
 
-@router.get("/{test_id}/submission/{submission_id}", response_model=SubmissionReviewResponse)
+@router.get(
+    "/{test_id}/submission/{submission_id}",
+    response_model=SubmissionReviewResponse
+)
 def review_submission(
     test_id: int,
     submission_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Full answer-by-answer review of a student's submission.
-    Shows the question text, selected answer, whether it was correct,
-    and what the correct answer was.
-    Used when the instructor clicks the "Review" button.
-    """
     check_instructor(current_user)
 
     submission = db.query(TestSubmission).filter(
         TestSubmission.id == submission_id,
         TestSubmission.test_id == test_id
     ).first()
+
     if not submission:
-        raise HTTPException(status_code=404, detail="Submission not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
 
-    student = db.query(User).filter(User.id == submission.student_user_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+    student = db.query(User).filter(
+        User.id == submission.student_user_id
+    ).first()
 
-    # Build answer review items
     review_items = []
-    questions = db.query(Question).filter(Question.test_id == test_id).all()
 
-    student_answers = {a.question_id: a for a in submission.answers}
+    questions = db.query(Question).filter(
+        Question.test_id == test_id
+    ).all()
+
+    answer_map = {
+        a.question_id: a
+        for a in submission.answers
+    }
 
     for question in questions:
-        # Find the correct option for this question
-        correct_option = next(
-            (o for o in question.options if o.is_correct), None
+
+        sa = answer_map.get(question.id)
+
+        student_answer = None
+
+        if sa:
+
+            if question.question_type == "mcq":
+
+                if sa.selected_option_id:
+
+                    option = db.query(Option).filter(
+                        Option.id == sa.selected_option_id
+                    ).first()
+
+                    student_answer = (
+                        option.text
+                        if option
+                        else None
+                    )
+
+            elif question.question_type == "checkbox":
+
+                student_answer = (
+                    sa.selected_option_ids
+                )
+
+            else:
+
+                student_answer = sa.text_answer
+
+        review_items.append(
+            AnswerReviewItem(
+                question_id=question.id,
+                question_text=question.text,
+                question_type=question.question_type,
+                student_answer=student_answer,
+                expected_answer=question.expected_answer,
+                awarded_marks=sa.awarded_marks if sa else 0,
+                max_marks=question.marks,
+                feedback=None
+            )
         )
-        sa = student_answers.get(question.id)
-
-        selected_opt = None
-        if sa and sa.selected_option_id:
-            selected_opt = db.query(Option).filter(Option.id == sa.selected_option_id).first()
-
-        is_correct = None
-        if sa and selected_opt:
-            is_correct = selected_opt.is_correct
-
-        review_items.append(AnswerReviewItem(
-            question_id=question.id,
-            question_text=question.text,
-            selected_option_id=sa.selected_option_id if sa else None,
-            selected_option_text=selected_opt.text if selected_opt else None,
-            is_correct=is_correct,
-            correct_option_text=correct_option.text if correct_option else None
-        ))
 
     return SubmissionReviewResponse(
         submission_id=submission.id,
         test_id=test_id,
+
         student_id=student.student_id or str(student.id),
         student_name=student.name,
+
         started_at=submission.started_at,
         submitted_at=submission.submitted_at,
-        score=submission.score,
+
+        obtained_marks=submission.obtained_marks,
+        total_marks=submission.total_marks,
+        percentage=submission.score_percentage,
+
         is_passed=submission.is_passed,
         status=submission.status,
+
         answers=review_items
     )
+
+@router.post(
+    "/{test_id}/submit",
+    response_model=TestSubmitResponse
+)
+def submit_test(
+    test_id: int,
+    payload: TestSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    test = db.query(Test).filter(
+        Test.id == test_id
+    ).first()
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    submission = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.student_user_id == current_user["user_id"]
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=400,
+            detail="Start test first"
+        )
+
+    if submission.status == "submitted":
+        raise HTTPException(
+            status_code=400,
+            detail="Test already submitted"
+        )
+
+    db.query(StudentAnswer).filter(
+        StudentAnswer.submission_id == submission.id
+    ).delete()
+
+    total_marks = 0
+    obtained_marks = 0
+
+    for answer in payload.answers:
+
+        question = db.query(Question).filter(
+            Question.id == answer.question_id,
+            Question.test_id == test_id
+        ).first()
+
+        if not question:
+            continue
+
+        total_marks += question.marks
+
+        awarded_marks = evaluate_question(
+            db,
+            question,
+            answer
+        )
+
+        obtained_marks += awarded_marks
+
+        db.add(
+            StudentAnswer(
+                submission_id=submission.id,
+                question_id=question.id,
+                selected_option_id=answer.selected_option_id,
+                selected_option_ids=",".join(
+                    map(
+                        str,
+                        answer.selected_option_ids or []
+                    )
+                ),
+                text_answer=answer.text_answer,
+                awarded_marks=awarded_marks,
+                max_marks=question.marks
+            )
+        )
+
+    percentage = 0
+
+    if total_marks > 0:
+        percentage = (
+            obtained_marks /
+            total_marks
+        ) * 100
+
+    submission.obtained_marks = round(
+        obtained_marks,
+        2
+    )
+
+    submission.total_marks = round(
+        total_marks,
+        2
+    )
+
+    submission.score_percentage = round(
+        percentage,
+        2
+    )
+
+    submission.is_passed = (
+        percentage >= PASS_THRESHOLD
+    )
+
+    submission.status = "submitted"
+
+    submission.submitted_at = datetime.now(
+        timezone.utc
+    )
+
+    db.commit()
+    db.refresh(submission)
+
+    return TestSubmitResponse(
+        submission_id=submission.id,
+        obtained_marks=submission.obtained_marks,
+        total_marks=submission.total_marks,
+        percentage=submission.score_percentage,
+        is_passed=submission.is_passed
+    )
+
+
+@router.get("/student")
+def get_student_tests(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.student_user_id ==
+            current_user["user_id"]
+        )
+        .all()
+    )
+
+    result = []
+
+    for sub in submissions:
+
+        test = sub.test
+
+        result.append({
+            "test_id": test.id,
+            "title": test.title,
+            "module": test.module.title if test.module else None,
+            "status": sub.status,
+            "obtained_marks": sub.obtained_marks,
+            "total_marks": sub.total_marks,
+            "percentage": sub.score_percentage,
+            "is_passed": sub.is_passed,
+            "submitted_at": sub.submitted_at
+        })
+
+    return result
+
+@router.get("/student/{test_id}/result")
+def student_result(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    submission = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.test_id == test_id,
+            TestSubmission.student_user_id ==
+            current_user["user_id"]
+        )
+        .first()
+    )
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Result not found"
+        )
+
+    answers = []
+
+    for ans in submission.answers:
+
+        question = (
+            db.query(Question)
+            .filter(
+                Question.id == ans.question_id
+            )
+            .first()
+        )
+
+        student_answer = None
+        correct_answer = None
+
+        if question.question_type == "mcq":
+
+            selected = (
+                db.query(Option)
+                .filter(
+                    Option.id ==
+                    ans.selected_option_id
+                )
+                .first()
+            )
+
+            correct = (
+                db.query(Option)
+                .filter(
+                    Option.question_id ==
+                    question.id,
+                    Option.is_correct == True
+                )
+                .first()
+            )
+
+            student_answer = (
+                selected.text
+                if selected else None
+            )
+
+            correct_answer = (
+                correct.text
+                if correct else None
+            )
+
+        else:
+
+            student_answer = ans.text_answer
+            correct_answer = question.expected_answer
+
+        answers.append({
+            "question_id": question.id,
+            "question": question.text,
+            "student_answer": student_answer,
+            "correct_answer": correct_answer,
+            "awarded_marks": ans.awarded_marks,
+            "max_marks": ans.max_marks
+        })
+
+    return {
+        "test_id": test_id,
+        "title": submission.test.title,
+        "obtained_marks": submission.obtained_marks,
+        "total_marks": submission.total_marks,
+        "percentage": submission.score_percentage,
+        "answers": answers
+    }
+
+@router.get("/student/performance")
+def student_performance(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.student_user_id ==
+            current_user["user_id"],
+            TestSubmission.status == "submitted"
+        )
+        .all()
+    )
+
+    if not submissions:
+        return {
+            "total_tests": 0
+        }
+
+    scores = [
+        s.score_percentage
+        for s in submissions
+    ]
+
+    return {
+        "total_tests": len(submissions),
+        "passed": len(
+            [s for s in submissions if s.is_passed]
+        ),
+        "failed": len(
+            [s for s in submissions if not s.is_passed]
+        ),
+        "average_score": round(
+            sum(scores) / len(scores),
+            2
+        ),
+        "highest_score": max(scores),
+        "lowest_score": min(scores)
+    }
+
+
+@router.get("/instructor")
+def instructor_tests(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_instructor(current_user)
+
+    tests = (
+        db.query(Test)
+        .filter(
+            Test.created_by ==
+            current_user["user_id"]
+        )
+        .all()
+    )
+
+    result = []
+
+    for test in tests:
+
+        submissions = test.submissions
+
+        avg = 0
+
+        if submissions:
+
+            avg = round(
+                sum(
+                    s.score_percentage or 0
+                    for s in submissions
+                ) / len(submissions),
+                2
+            )
+
+        result.append({
+            "test_id": test.id,
+            "title": test.title,
+            "students": len(submissions),
+            "average_score": avg,
+            "passed": len(
+                [
+                    s for s in submissions
+                    if s.is_passed
+                ]
+            ),
+            "failed": len(
+                [
+                    s for s in submissions
+                    if s.is_passed is False
+                ]
+            )
+        })
+
+    return result
+
+@router.get("/instructor/{test_id}/analytics")
+def test_analytics(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_instructor(current_user)
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.test_id ==
+            test_id,
+            TestSubmission.status ==
+            "submitted"
+        )
+        .all()
+    )
+
+    if not submissions:
+        return {}
+
+    scores = [
+        s.score_percentage
+        for s in submissions
+    ]
+
+    return {
+        "test_id": test_id,
+        "average_score": round(
+            sum(scores) / len(scores),
+            2
+        ),
+        "highest_score": max(scores),
+        "lowest_score": min(scores),
+        "pass_rate": round(
+            (
+                len(
+                    [
+                        s
+                        for s in submissions
+                        if s.is_passed
+                    ]
+                )
+                /
+                len(submissions)
+            ) * 100,
+            2
+        )
+    }
+
+@router.get("/instructor/{test_id}/question-analysis")
+def question_analysis(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_instructor(current_user)
+
+    questions = (
+        db.query(Question)
+        .filter(
+            Question.test_id == test_id
+        )
+        .all()
+    )
+
+    result = []
+
+    for question in questions:
+
+        answers = (
+            db.query(StudentAnswer)
+            .filter(
+                StudentAnswer.question_id ==
+                question.id
+            )
+            .all()
+        )
+
+        attempted = len(answers)
+
+        correct = len([
+            a
+            for a in answers
+            if a.awarded_marks >= question.marks
+        ])
+
+        success_rate = 0
+
+        if attempted:
+            success_rate = round(
+                (correct / attempted) * 100,
+                2
+            )
+
+        result.append({
+            "question_id": question.id,
+            "question": question.text,
+            "attempted": attempted,
+            "correct": correct,
+            "incorrect": attempted - correct,
+            "success_rate": success_rate
+        })
+
+    return result

@@ -20,6 +20,8 @@ class Assignment(Base):
 
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    objective = Column(Text, nullable=True)
+
     expected_outcome = Column(Text, nullable=True)
     due_date = Column(DateTime, nullable=True)
 

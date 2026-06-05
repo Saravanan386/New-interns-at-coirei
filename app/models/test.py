@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, F
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
+from sqlalchemy import Text
 
 class Test(Base):
     __tablename__ = "tests"
@@ -38,22 +39,63 @@ class Question(Base):
     __tablename__ = "test_questions"
 
     id = Column(Integer, primary_key=True, index=True)
-    test_id = Column(Integer, ForeignKey("tests.id"), nullable=False)
-    text = Column(String, nullable=False)
+
+    test_id = Column(
+        Integer,
+        ForeignKey("tests.id"),
+        nullable=False
+    )
+
+    text = Column(Text, nullable=False)
+
+    # mcq | checkbox | short_answer | long_answer
+    question_type = Column(
+        String,
+        nullable=False,
+        default="mcq"
+    )
+
+    marks = Column(
+        Float,
+        default=1
+    )
+
+    # instructor answer for text questions
+    expected_answer = Column(
+        Text,
+        nullable=True
+    )
 
     test = relationship("Test", back_populates="questions")
-    options = relationship("Option", back_populates="question", cascade="all, delete-orphan")
+
+    options = relationship(
+        "Option",
+        back_populates="question",
+        cascade="all, delete-orphan"
+    )
 
 class Option(Base):
     __tablename__ = "question_options"
 
-    id = Column(Integer, primary_key=True, index=True)
-    question_id = Column(Integer, ForeignKey("test_questions.id"), nullable=False)
+    id = Column(Integer, primary_key=True)
+
+    question_id = Column(
+        Integer,
+        ForeignKey("test_questions.id"),
+        nullable=False
+    )
+
     text = Column(String, nullable=False)
-    is_correct = Column(Boolean, default=False)
 
-    question = relationship("Question", back_populates="options")
+    is_correct = Column(
+        Boolean,
+        default=False
+    )
 
+    question = relationship(
+        "Question",
+        back_populates="options"
+    )
 
 # ── New submission tracking ──────────────────────────────────────────────────
 
@@ -67,7 +109,11 @@ class TestSubmission(Base):
     started_at = Column(DateTime, nullable=True)
     submitted_at = Column(DateTime, nullable=True)
     # score as percentage (0–100), null until submitted
-    score = Column(Float, nullable=True)
+    obtained_marks = Column(Float, default=0)
+
+    total_marks = Column(Float, default=0)
+
+    score_percentage = Column(Float)
     # True = passed, False = failed, None = not submitted yet
     is_passed = Column(Boolean, nullable=True)
     # 'in_progress' | 'submitted' | 'not_attended'
@@ -85,15 +131,52 @@ class TestSubmission(Base):
     )
 
 class StudentAnswer(Base):
-    """The option a student selected for each question in a submission."""
     __tablename__ = "student_answers"
 
-    id = Column(Integer, primary_key=True, index=True)
-    submission_id = Column(Integer, ForeignKey("test_submissions.id"), nullable=False)
-    question_id = Column(Integer, ForeignKey("test_questions.id"), nullable=False)
-    # null means the student skipped the question
-    selected_option_id = Column(Integer, ForeignKey("question_options.id"), nullable=True)
+    id = Column(Integer, primary_key=True)
 
-    submission = relationship("TestSubmission", back_populates="answers")
-    question = relationship("Question")
-    selected_option = relationship("Option")
+    submission_id = Column(
+        Integer,
+        ForeignKey("test_submissions.id"),
+        nullable=False
+    )
+
+    question_id = Column(
+        Integer,
+        ForeignKey("test_questions.id"),
+        nullable=False
+    )
+
+    # MCQ
+    selected_option_id = Column(
+        Integer,
+        ForeignKey("question_options.id"),
+        nullable=True
+    )
+
+    # Checkbox
+    selected_option_ids = Column(
+        String,
+        nullable=True
+    )
+
+    # Short / Long answer
+    text_answer = Column(
+        Text,
+        nullable=True
+    )
+
+    awarded_marks = Column(
+        Float,
+        default=0
+    )
+
+    max_marks = Column(
+        Float,
+        default=0
+    )
+
+    submission = relationship(
+        "TestSubmission",
+        back_populates="answers"
+    )
