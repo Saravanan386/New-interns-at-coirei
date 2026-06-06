@@ -3,6 +3,7 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.config import JWT_SECRET
 
 # -------------------------
 # Password hashing
@@ -23,7 +24,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # JWT handling
 # -------------------------
 
-JWT_SECRET = os.getenv("JWT_SECRET", "supersecretkey")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 security = HTTPBearer()

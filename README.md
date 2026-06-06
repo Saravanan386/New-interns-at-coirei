@@ -81,7 +81,7 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory:
 ```env
 DATABASE_URL=postgresql://user:password@localhost/lms_db
-SECRET_KEY=your_super_secret_jwt_key
+JWT_SECRET=your_super_secret_jwt_key
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 

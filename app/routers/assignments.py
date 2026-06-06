@@ -331,6 +331,16 @@ def list_assignments(
     return q.order_by(Assignment.created_at.desc()).all()
 
 
+@router.get("/dashboard", response_model=List[StudentDashboardAssignmentItem])
+def student_dashboard_assignments_route(
+    status: Optional[str] = None,
+    date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return student_dashboard_assignments(status, date, db, current_user)
+
+
 # ── Get Single Assignment ─────────────────────────────────────────────────────
 
 @router.get("/{assignment_id}", response_model=AssignmentResponse)
@@ -418,11 +428,16 @@ def get_submissions(
         raise HTTPException(status_code=404, detail="Assignment not found")
 
     # All enrolled students in the batch
-    enrollments = db.query(Enrollment).filter(
-        Enrollment.course_id == assignment.course_id,
-        Enrollment.batch_name == assignment.batch_name,
-        Enrollment.status == "ongoing"
-    ).all()
+    enrollments = (
+        db.query(Enrollment)
+        .join(Classroom, Classroom.id == Enrollment.classroom_id)
+        .filter(
+            Classroom.course_id == assignment.course_id,
+            Classroom.batch_name == assignment.batch_name,
+            Enrollment.status == "ongoing",
+        )
+        .all()
+    )
 
     # Build submission lookup
     submissions = db.query(AssignmentSubmission).filter(
@@ -564,7 +579,6 @@ def my_assignments(
 
 # ── Student: Dashboard Assignment Cards ───────────────────────────────────────
 
-@router.get("/dashboard", response_model=List[StudentDashboardAssignmentItem])
 def student_dashboard_assignments(
     status: Optional[str] = None,    # 'in_progress' | 'completed' | 'overdue'
     date: Optional[str] = None,      # ISO date filter e.g. '2026-03-19' (matches due_date day)
@@ -607,13 +621,17 @@ def student_dashboard_assignments(
     cards: List[StudentDashboardAssignmentItem] = []
 
     for en in enrollments:
-        course = db.query(Course).filter(Course.id == en.course_id).first()
+        classroom = db.query(Classroom).filter(Classroom.id == en.classroom_id).first()
+        if not classroom:
+            continue
+
+        course = db.query(Course).filter(Course.id == classroom.course_id).first()
         if not course:
             continue
 
         assignments = db.query(Assignment).filter(
-            Assignment.course_id == en.course_id,
-            Assignment.batch_name == en.batch_name,
+            Assignment.course_id == classroom.course_id,
+            Assignment.batch_name == classroom.batch_name,
         ).order_by(Assignment.due_date.asc()).all()
 
         for a in assignments:

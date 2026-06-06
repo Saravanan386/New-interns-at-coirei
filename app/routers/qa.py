@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.database import get_db
 from app.utils.security import get_current_user
@@ -67,8 +67,7 @@ class QAPostResponse(BaseModel):
     is_liked_by_me: bool
     is_bookmarked_by_me: bool
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class QAReplyResponse(BaseModel):
@@ -82,8 +81,7 @@ class QAReplyResponse(BaseModel):
     is_liked_by_me: bool
     author: ChatAuthor
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

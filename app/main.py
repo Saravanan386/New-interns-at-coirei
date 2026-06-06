@@ -52,7 +52,7 @@ from app.routers import (
 app = FastAPI(
     title="LMS Backend",
     version="0.1.0",
-    description="LMS API with LiveKit video conferencing",
+    description="LMS API with Jitsi video conferencing",
 )
 
 # Merged allow_origins to include all URLs from both versions
@@ -76,7 +76,6 @@ app.add_middleware(
 )
 
 # Auto-create tables
-Base.metadata.create_all(bind=engine)
 
 # Routers - Carefully merged to prevent duplicates
 app.include_router(auth.router)

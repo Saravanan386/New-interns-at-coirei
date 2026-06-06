@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Literal
 
 from datetime import datetime
@@ -16,8 +16,7 @@ class NotificationResponse(BaseModel):
     created_at: datetime
     related_id: Optional[int]   # assignment_id / test_id for deep-linking
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Chapters
@@ -40,8 +39,7 @@ class ChapterResponse(BaseModel):
 
     module_id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 # Modules
 class ModuleCreate(BaseModel):
     title: str
@@ -59,8 +57,7 @@ class ModuleResponse(BaseModel):
     
 
     chapters: List[ChapterResponse] = Field(default_factory=list)
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Tests
 
@@ -74,8 +71,7 @@ class AssignmentResourceResponse(BaseModel):
     file_type: Optional[str]
     uploaded_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AssignmentCreate(BaseModel):
@@ -111,8 +107,7 @@ class AssignmentResponse(BaseModel):
     status : Optional[str]
 
     resources: List[AssignmentResourceResponse] = Field(default_factory=list)
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AssignmentSubmissionCreate(BaseModel):
@@ -132,8 +127,7 @@ class AssignmentSubmissionResponse(BaseModel):
     grade: Optional[str]
     feedback: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StudentAssignmentRow(BaseModel):
@@ -145,8 +139,7 @@ class StudentAssignmentRow(BaseModel):
     grade: Optional[str]
     submission_id: Optional[int]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StudentDashboardAssignmentItem(BaseModel):
@@ -165,8 +158,7 @@ class StudentDashboardAssignmentItem(BaseModel):
     submission_id: Optional[int]
     grade: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Chat / Q&A Schemas ────────────────────────────────────────────────────────
@@ -177,8 +169,7 @@ class ChatAuthor(BaseModel):
     role: str           # 'student' | 'instructor'
     student_id: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatReplyCreate(BaseModel):
@@ -194,8 +185,7 @@ class ChatReplyResponse(BaseModel):
     is_instructor: bool        # True when author_role == 'instructor' → blue badge
     author: ChatAuthor
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatPostCreate(BaseModel):
@@ -221,8 +211,7 @@ class ChatPostResponse(BaseModel):
     is_bookmarked_by_me: bool  # whether the requesting user bookmarked this
     replies: List[ChatReplyResponse]= Field(default_factory=list)
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── DM (1-to-1) Chat Schemas ──────────────────────────────────────────────────
@@ -248,8 +237,7 @@ class DMMessageResponse(BaseModel):
     is_liked_by_me: bool
     is_bookmarked_by_me: bool
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DMConversationResponse(BaseModel):
@@ -262,8 +250,7 @@ class DMConversationResponse(BaseModel):
     last_message_text: Optional[str]
     last_message_at: Optional[datetime]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StartConversationRequest(BaseModel):
@@ -295,8 +282,7 @@ class GroupMessageResponse(BaseModel):
     is_liked_by_me: bool
     is_bookmarked_by_me: bool
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class GroupMemberResponse(BaseModel):
@@ -306,8 +292,7 @@ class GroupMemberResponse(BaseModel):
     student_id: Optional[str]
     avatar_url: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Chat Upload Schemas ───────────────────────────────────────────────────────
@@ -330,8 +315,7 @@ class UserProfileResponse(BaseModel):
     email: str
     avatar_url: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Q&A Visibility Schema ─────────────────────────────────────────────────────
@@ -354,31 +338,23 @@ class ClassroomResponse(BaseModel):
     schedule_type: str | None = None
     start_month: str | None = None
 
-    class Config:
-        from_attributes = True
-    # In app/schemas.py
-class ClassroomCreate(BaseModel):
-    course_id: int          # User selects this (dropdown in UI)
-    room_name: str          # User types this
-    # We remove 'name' or 'batch_name' from input if you want to auto-generate it, 
-    # or keep it if the user types the batch name too. 
-    # Assuming you want to type Batch Name too based on previous context:
-    batch_name: str         
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "course_id": 1,
-                "batch_name": "Batch-C",
-                "room_name": "AI_ML_Room"
-            }
-        }   
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ClassroomCreate(BaseModel):
     course_id: int
     batch_name: str
     room_name: str
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "course_id": 1,
+                "batch_name": "Batch-C",
+                "room_name": "AI_ML_Room",
+            }
+        }
+    )
 
 
 
@@ -409,8 +385,7 @@ class CourseResponse(BaseModel):
     duration_months: int
     total_lessons: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 
@@ -504,8 +479,7 @@ class RegistrationResponse(BaseModel):
     account_status: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 
@@ -517,8 +491,7 @@ class ChapterResourceResponse(BaseModel):
     file_size: str | None
     uploaded_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 
@@ -538,8 +511,7 @@ class OptionResponse(BaseModel):
     id: int
     text: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --------------------------------------------------
@@ -571,8 +543,7 @@ class QuestionResponse(BaseModel):
 
     options: List[OptionResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --------------------------------------------------
@@ -598,8 +569,7 @@ class TestResponse(BaseModel):
     id: int
     title: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 
@@ -681,8 +651,7 @@ class StudentRowResponse(BaseModel):
 
     submission_id: Optional[int]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TestDetailResponse(BaseModel):
@@ -712,8 +681,7 @@ class TestDetailResponse(BaseModel):
 
     students: List[StudentRowResponse]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ------------------------------
@@ -737,8 +705,7 @@ class AnswerReviewItem(BaseModel):
 
     correct_option_text: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SubmissionReviewResponse(BaseModel):
@@ -764,8 +731,7 @@ class SubmissionReviewResponse(BaseModel):
 
     answers: List[AnswerReviewItem]
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AnswerReviewItem(BaseModel):
 
