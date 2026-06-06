@@ -99,15 +99,18 @@ class AssignmentUpdate(BaseModel):
 class AssignmentResponse(BaseModel):
     id: int
     course_id: int
+    course_name: str
     batch_name: str
     module_name: Optional[str] = None
     title: str
     description: Optional[str]
+    objective: Optional[str]
     expected_outcome: Optional[str]
     due_date: Optional[datetime]
     created_at: datetime
-    resources: List[AssignmentResourceResponse] = Field(default_factory=list)
+    status : Optional[str]
 
+    resources: List[AssignmentResourceResponse] = Field(default_factory=list)
     class Config:
         orm_mode = True
 

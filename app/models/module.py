@@ -35,7 +35,7 @@ class Module(Base):
         back_populates="module",
         cascade="all, delete-orphan"
     )
-
+    
 
 class Chapter(Base):
     __tablename__ = "chapters"

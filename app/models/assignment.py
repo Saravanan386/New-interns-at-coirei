@@ -6,6 +6,11 @@ from datetime import datetime
 from app.database import Base
 
 
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from app.database import Base
+
 class Assignment(Base):
     """
     Created by an instructor for a specific course + batch + module.
@@ -16,7 +21,9 @@ class Assignment(Base):
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     batch_name = Column(String, nullable=False)
-    module_id = Column(Integer, nullable=False)          # free-text module label
+    
+    # Updated: Points properly to the modules table
+    module_id = Column(Integer, ForeignKey("modules.id"), nullable=False)          
 
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
@@ -31,6 +38,10 @@ class Assignment(Base):
     # Relationships
     course = relationship("Course")
     instructor = relationship("User")
+    
+    # Added: This allows 'a.module.title' to work cleanly!
+    module = relationship("Module") 
+    
     resources = relationship(
         "AssignmentResource",
         back_populates="assignment",
@@ -41,7 +52,19 @@ class Assignment(Base):
         back_populates="assignment",
         cascade="all, delete-orphan"
     )
+    @property
+    def course_name(self) -> str:
+        """Dynamically fetches the course name through the course relationship."""
+        return self.course.name if self.course else ""
 
+    @property
+    def status(self) -> str:
+        """
+        Provides a default base status string for the assignment object 
+        to satisfy the schema requirement on creation.
+        """
+        return "in progress"
+# ... (Keep AssignmentResource and AssignmentSubmission classes exactly as they were)
 
 class AssignmentResource(Base):
     """
@@ -58,7 +81,7 @@ class AssignmentResource(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     assignment = relationship("Assignment", back_populates="resources")
-
+    
 
 class AssignmentSubmission(Base):
     """

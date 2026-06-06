@@ -202,7 +202,6 @@ def get_modules(
     
     return modules
 
-
 @router.delete("/{module_id}")
 def delete_module(
     module_id: int,
@@ -223,14 +222,20 @@ def delete_module(
             detail="Module not found"
         )
 
+    # 1. Manually clean up or remove the foreign key blocker rows first
+    # Option A: Delete the child records entirely
+    db.query(Assignment).filter(Assignment.module_id == module_id).delete(synchronize_session=false)
+    
+    # Option B: Or, if you want to keep assignments but remove them from this module:
+    # db.query(Assignment).filter(Assignment.module_id == module_id).update({"module_id": None})
+
+    # 2. Safely delete the parent module now that constraints are cleared
     db.delete(module)
     db.commit()
 
-
     return {
-        "message": "Module deleted successfully"
+        "message": "Module and its associated assignments deleted successfully"
     }
-
 
 @router.put("/{module_id}", response_model=ModuleResponse)
 def update_module(

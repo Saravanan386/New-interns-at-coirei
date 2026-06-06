@@ -456,26 +456,37 @@ def get_submissions(
 
 
 # ── Student: View My Assignments ──────────────────────────────────────────────
-
-@router.get("/my/list", response_model=List[AssignmentResponse])
+@router.get("/my/list")
 def my_assignments(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Returns all assignments visible to the logged-in student
-    (based on their active enrollments).
+    Returns all assignments visible to the logged-in student based on their 
+    active enrollments, accompanied by a dynamically evaluated completion status.
     """
     require_student(current_user)
 
+    # Ensure comparisons use a consistent timezone-aware datetime (UTC)
+    now = datetime.now(timezone.utc)
+    student_id = current_user["user_id"]
+
     enrollments = db.query(Enrollment).filter(
-        Enrollment.user_id == current_user["user_id"],
+        Enrollment.user_id == student_id,
         Enrollment.status == "ongoing"
     ).all()
 
-    assignments = []
-    for en in enrollments:
+    # Pre-fetch all submissions for this user to avoid making N separate queries inside the loop
+    student_submissions = db.query(AssignmentSubmission).filter(
+        AssignmentSubmission.student_user_id == student_id
+    ).all()
+    
+    # Map by assignment_id for fast O(1) lookups
+    submission_map = {sub.assignment_id: sub for sub in student_submissions}
 
+    output_assignments = []
+
+    for en in enrollments:
         classroom = (
             db.query(Classroom)
             .filter(Classroom.id == en.classroom_id)
@@ -495,8 +506,60 @@ def my_assignments(
             .all()
         )
 
-        assignments.extend(batch_assignments)
-    return assignments
+        for a in batch_assignments:
+            submission = submission_map.get(a.id)
+            
+            # Ensure our database assignment due_date is treated as timezone-aware for clean comparison
+            assignment_due = a.due_date
+            if assignment_due and assignment_due.tzinfo is None:
+                assignment_due = assignment_due.replace(tzinfo=timezone.utc)
+
+            # ── Dynamic Status Evaluation Logic ──
+            if submission:
+                if submission.status == "graded" or submission.grade is not None:
+                    calculated_status = "graded"
+                else:
+                    # Check if the student's submission timestamp was past the due date
+                    submission_time = submission.submitted_at
+                    if submission_time and submission_time.tzinfo is None:
+                        submission_time = submission_time.replace(tzinfo=timezone.utc)
+                    
+                    if assignment_due and submission_time > assignment_due:
+                        calculated_status = "late submitted"
+                    else:
+                        calculated_status = "submitted"
+            else:
+                # No submission exists yet
+                if assignment_due and now > assignment_due:
+                    calculated_status = "overdue"
+                else:
+                    calculated_status = "in progress"
+
+            # Package custom payload payload response
+            output_assignments.append({
+                "id": a.id,
+                "course_id": a.course_id,
+                "batch_name": a.batch_name,
+                "module_id": a.module_id,
+                "module_title": a.module.title if a.module else None,
+                "title": a.title,
+                "description": a.description,
+                "objective": a.objective,
+                "expected_outcome": a.expected_outcome,
+                "due_date": a.due_date,
+                "created_at": a.created_at,
+                "status": calculated_status,
+                "grade": submission.grade if submission else None,
+                "feedback": submission.feedback if submission else None,
+                "submitted_at": submission.submitted_at if submission else None
+            })
+
+    return output_assignments
+
+
+    
+
+   
 
 
 # ── Student: Dashboard Assignment Cards ───────────────────────────────────────
