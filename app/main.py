@@ -68,7 +68,7 @@ app.add_middleware(
         # "https://maya-ohonogramis-dayton.ngrok-free.dev",
         # "https://lms-lime-chi.vercel.app",
         # "https://admin-lms-seven.vercel.app", 
-        "https://lms-iota-ten-60.vercel.app/"
+        "https://lms-iota-ten-60.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
