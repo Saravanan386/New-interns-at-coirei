@@ -413,24 +413,24 @@ def review_submission(
         )
 
     return SubmissionReviewResponse(
-        submission_id=submission.id,
-        test_id=test_id,
+    submission_id=submission.id,
+    test_id=test_id,
 
-        student_id=student.student_id or str(student.id),
-        student_name=student.name,
+    student_id=student.student_id or str(student.id),
+    student_name=student.name,
 
-        started_at=submission.started_at,
-        submitted_at=submission.submitted_at,
+    started_at=submission.started_at,
+    submitted_at=submission.submitted_at,
 
-        obtained_marks=submission.obtained_marks,
-        total_marks=submission.total_marks,
-        percentage=submission.score_percentage,
+    obtained_marks=submission.obtained_marks,
+    total_marks=submission.total_marks,
+    percentage=submission.score_percentage,
 
-        is_passed=submission.is_passed,
-        status=submission.status,
+    is_passed=submission.is_passed,
+    status=submission.status,
 
-        answers=review_items
-    )
+    answers=review_items
+)
 
 @router.post(
     "/{test_id}/submit",
@@ -733,8 +733,8 @@ def student_performance(
     }
 
 
-@router.get("/instructor")
-def instructor_tests(
+@router.get("/instructor/dashboard")
+def instructor_test_dashboard(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -742,10 +742,7 @@ def instructor_tests(
 
     tests = (
         db.query(Test)
-        .filter(
-            Test.created_by ==
-            current_user["user_id"]
-        )
+        .filter(Test.created_by == current_user["user_id"])
         .all()
     )
 
@@ -755,11 +752,29 @@ def instructor_tests(
 
         submissions = test.submissions
 
-        avg = 0
+        enrolled = (
+            db.query(Enrollment)
+            .join(
+                Classroom,
+                Classroom.id == Enrollment.classroom_id
+            )
+            .filter(
+                Classroom.course_id == test.course_id,
+                Classroom.batch_name == test.batch_name,
+                Enrollment.status == "ongoing"
+            )
+            .count()
+        )
+
+        submitted = len([
+            s for s in submissions
+            if s.status == "submitted"
+        ])
+
+        avg_score = 0
 
         if submissions:
-
-            avg = round(
+            avg_score = round(
                 sum(
                     s.score_percentage or 0
                     for s in submissions
@@ -768,25 +783,69 @@ def instructor_tests(
             )
 
         result.append({
+
             "test_id": test.id,
+
             "title": test.title,
-            "students": len(submissions),
-            "average_score": avg,
-            "passed": len(
-                [
+
+            "description": test.description,
+
+            "course_id": test.course_id,
+
+            "course_name":
+                test.course.name
+                if test.course else None,
+
+            "module_id":
+                test.module_id,
+
+            "module_name":
+                test.module.title
+                if test.module else None,
+
+            "batch_name":
+                test.batch_name,
+
+            "start_time":
+                test.start_time,
+
+            "end_time":
+                test.end_time,
+
+            "total_questions":
+                len(test.questions),
+
+            "total_enrolled":
+                enrolled,
+
+            "total_submitted":
+                submitted,
+
+            "pending":
+                enrolled - submitted,
+
+            "average_score":
+                avg_score,
+
+            "passed":
+                len([
                     s for s in submissions
                     if s.is_passed
-                ]
-            ),
-            "failed": len(
-                [
+                ]),
+
+            "failed":
+                len([
                     s for s in submissions
                     if s.is_passed is False
-                ]
-            )
+                ]),
+
+            "created_at":
+                test.created_at
         })
 
     return result
+
+
 
 @router.get("/instructor/{test_id}/analytics")
 def test_analytics(
@@ -891,6 +950,255 @@ def question_analysis(
             "correct": correct,
             "incorrect": attempted - correct,
             "success_rate": success_rate
+        })
+
+    return result
+
+
+@router.get("/instructor/{test_id}/overview")
+def test_overview(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_instructor(current_user)
+
+    test = (
+        db.query(Test)
+        .filter(Test.id == test_id)
+        .first()
+    )
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    enrollments = (
+        db.query(Enrollment)
+        .join(
+            Classroom,
+            Classroom.id == Enrollment.classroom_id
+        )
+        .filter(
+            Classroom.course_id == test.course_id,
+            Classroom.batch_name == test.batch_name,
+            Enrollment.status == "ongoing"
+        )
+        .all()
+    )
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.test_id == test.id,
+            TestSubmission.status == "submitted"
+        )
+        .all()
+    )
+
+    scores = [
+        s.score_percentage
+        for s in submissions
+        if s.score_percentage is not None
+    ]
+
+    return {
+
+        "test_id": test.id,
+        "title": test.title,
+        "description": test.description,
+
+        "course": {
+            "id": test.course.id if test.course else None,
+            "name": test.course.name if test.course else None
+        },
+
+        "module": {
+            "id": test.module.id if test.module else None,
+            "name": test.module.title if test.module else None
+        },
+
+        "batch_name": test.batch_name,
+
+        "start_time": test.start_time,
+        "end_time": test.end_time,
+
+        "total_questions": len(test.questions),
+
+        "total_students": len(enrollments),
+
+        "submitted_students": len(submissions),
+
+        "pending_students":
+            len(enrollments) - len(submissions),
+
+        "passed_students": len([
+            s for s in submissions
+            if s.is_passed
+        ]),
+
+        "failed_students": len([
+            s for s in submissions
+            if s.is_passed is False
+        ]),
+
+        "average_score":
+            round(sum(scores) / len(scores), 2)
+            if scores else 0,
+
+        "highest_score":
+            max(scores)
+            if scores else 0,
+
+        "lowest_score":
+            min(scores)
+            if scores else 0,
+
+        "pass_rate":
+            round(
+                (
+                    len([
+                        s
+                        for s in submissions
+                        if s.is_passed
+                    ])
+                    /
+                    len(submissions)
+                ) * 100,
+                2
+            ) if submissions else 0
+    }
+
+@router.get("/instructor/{test_id}/students")
+def test_students(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_instructor(current_user)
+
+    test = (
+        db.query(Test)
+        .filter(Test.id == test_id)
+        .first()
+    )
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    enrollments = (
+        db.query(Enrollment)
+        .join(
+            Classroom,
+            Classroom.id == Enrollment.classroom_id
+        )
+        .filter(
+            Classroom.course_id == test.course_id,
+            Classroom.batch_name == test.batch_name,
+            Enrollment.status == "ongoing"
+        )
+        .all()
+    )
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.test_id == test.id
+        )
+        .all()
+    )
+
+    submission_map = {
+        s.student_user_id: s
+        for s in submissions
+    }
+
+    result = []
+
+    for enrollment in enrollments:
+
+        student = (
+            db.query(User)
+            .filter(
+                User.id == enrollment.user_id
+            )
+            .first()
+        )
+
+        if not student:
+            continue
+
+        submission = submission_map.get(student.id)
+
+        duration = None
+
+        if (
+            submission
+            and submission.started_at
+            and submission.submitted_at
+        ):
+            duration = int(
+                (
+                    submission.submitted_at
+                    - submission.started_at
+                ).total_seconds() / 60
+            )
+
+        result.append({
+
+            "student_user_id": student.id,
+
+            "student_id":
+                student.student_id,
+
+            "student_name":
+                student.name,
+
+            "email":
+                student.email,
+
+            "status":
+                submission.status
+                if submission
+                else "not_attempted",
+
+            "started_at":
+                submission.started_at
+                if submission
+                else None,
+
+            "submitted_at":
+                submission.submitted_at
+                if submission
+                else None,
+
+            "duration_minutes":
+                duration,
+
+            "obtained_marks":
+                submission.obtained_marks
+                if submission
+                else None,
+
+            "total_marks":
+                submission.total_marks
+                if submission
+                else None,
+
+            "percentage":
+                submission.score_percentage
+                if submission
+                else None,
+
+            "is_passed":
+                submission.is_passed
+                if submission
+                else None
         })
 
     return result

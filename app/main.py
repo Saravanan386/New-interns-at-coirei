@@ -65,9 +65,10 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "http://localhost:5175",
         "http://127.0.0.1:5175",
-        "https://maya-ohonogramis-dayton.ngrok-free.dev",
-        "https://lms-lime-chi.vercel.app",
-        "https://admin-lms-seven.vercel.app", # From New
+        # "https://maya-ohonogramis-dayton.ngrok-free.dev",
+        # "https://lms-lime-chi.vercel.app",
+        # "https://admin-lms-seven.vercel.app", 
+        "https://lms-iota-ten-60.vercel.app/"
     ],
     allow_credentials=True,
     allow_methods=["*"],
