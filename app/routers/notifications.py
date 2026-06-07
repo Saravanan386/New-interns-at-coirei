@@ -58,7 +58,7 @@ def get_notifications(
 
     for n in all_notifs:
         day = n.created_at.date()
-        item = NotificationResponse.from_orm(n)
+        item = NotificationResponse.model_validate(n)
         if day == now:
             today_list.append(item)
         elif day == yesterday:
@@ -69,9 +69,9 @@ def get_notifications(
     return {
         "unread_count": unread_count,
         "groups": [
-            {"label": "Today",     "notifications": [i.dict() for i in today_list]},
-            {"label": "Yesterday", "notifications": [i.dict() for i in yesterday_list]},
-            {"label": "Older",     "notifications": [i.dict() for i in older_list]},
+            {"label": "Today",     "notifications": [i.model_dump() for i in today_list]},
+            {"label": "Yesterday", "notifications": [i.model_dump() for i in yesterday_list]},
+            {"label": "Older",     "notifications": [i.model_dump() for i in older_list]},
         ]
     }
 

@@ -269,7 +269,7 @@ def update_course(
             detail="Course not found"
         )
 
-    update_data = data.dict(exclude_unset=True)
+    update_data = data.model_dump(exclude_unset=True)
 
     for key, value in update_data.items():
         setattr(course, key, value)

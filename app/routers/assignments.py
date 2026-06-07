@@ -70,6 +70,27 @@ def require_student(current_user: dict):
         raise HTTPException(status_code=403, detail="Student access required.")
 
 
+def can_access_assignment(db: Session, assignment: Assignment, current_user: dict) -> bool:
+    if current_user.get("role") == "instructor":
+        return True
+
+    if current_user.get("role") == "student":
+        enrollment = (
+            db.query(Enrollment)
+            .join(Classroom, Classroom.id == Enrollment.classroom_id)
+            .filter(
+                Enrollment.user_id == current_user["user_id"],
+                Classroom.course_id == assignment.course_id,
+                Classroom.batch_name == assignment.batch_name,
+                Enrollment.status == "ongoing",
+            )
+            .first()
+        )
+        return enrollment is not None
+
+    return False
+
+
 # ── Step 1 Dropdown Helpers ───────────────────────────────────────────────────
 
 @router.get("/courses")
@@ -466,7 +487,7 @@ def get_submissions(
         "batch_name": assignment.batch_name,
         "total_enrolled": len(rows),
         "total_submitted": sum(1 for r in rows if r.status in ["submitted", "graded"]),
-        "students": [r.dict() for r in rows]
+        "students": [r.model_dump() for r in rows]
     }
 
 
@@ -833,6 +854,9 @@ def get_assignment_resources(
             detail="Assignment not found"
         )
 
+    if not can_access_assignment(db, assignment, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this assignment")
+
     resources = (
         db.query(AssignmentResource)
         .filter(
@@ -878,6 +902,9 @@ def download_assignment_resource(
             detail="Resource not found"
         )
 
+    if not can_access_assignment(db, resource.assignment, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this assignment")
+
     if not os.path.exists(resource.file_path):
         raise HTTPException(
             status_code=404,
@@ -910,6 +937,9 @@ def view_assignment_resource(
             detail="Resource not found"
         )
 
+    if not can_access_assignment(db, resource.assignment, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this assignment")
+
     return FileResponse(
         resource.file_path,
         media_type=resource.file_type
@@ -932,6 +962,9 @@ def assignment_details(
             status_code=404,
             detail="Assignment not found"
         )
+
+    if not can_access_assignment(db, assignment, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this assignment")
 
     resources = (
         db.query(AssignmentResource)

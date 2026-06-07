@@ -691,103 +691,27 @@ class TestDetailResponse(BaseModel):
 # ------------------------------
 
 class AnswerReviewItem(BaseModel):
-
-
-    question_id: int
-
-    question_text: str
-
-    selected_option_id: Optional[int]
-
-    selected_option_text: Optional[str]
-
-    is_correct: Optional[bool]
-
-    correct_option_text: Optional[str]
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class SubmissionReviewResponse(BaseModel):
-
-
-    submission_id: int
-
-    test_id: int
-
-    student_id: str
-
-    student_name: str
-
-    started_at: Optional[datetime]
-
-    submitted_at: Optional[datetime]
-
-    score: Optional[float]
-
-    is_passed: Optional[bool]
-
-    status: str
-
-    answers: List[AnswerReviewItem]
-
-    model_config = ConfigDict(from_attributes=True)
-
-class AnswerReviewItem(BaseModel):
-
-    question_id: int
-
-    question_text: str
-
-    question_type: str
-
-    student_answer: Optional[str]
-
-    expected_answer: Optional[str]
-
-    awarded_marks: float
-
-    max_marks: float
-
-    feedback: Optional[str]
-
-class AnswerReviewItem(BaseModel):
-
     question_id: int
     question_text: str
     question_type: str
-
     student_answer: Optional[str]
     expected_answer: Optional[str]
-
     awarded_marks: float
     max_marks: float
-
     feedback: Optional[str]
 
 
 class SubmissionReviewResponse(BaseModel):
-
     submission_id: int
-
     test_id: int
-
     student_id: str
-
     student_name: str
-
     started_at: Optional[datetime]
-
     submitted_at: Optional[datetime]
-
     obtained_marks: float
-
     total_marks: float
-
     percentage: float
-
     is_passed: bool
-
     status: str
-
     answers: List[AnswerReviewItem]
+

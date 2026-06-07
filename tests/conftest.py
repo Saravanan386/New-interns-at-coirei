@@ -1,17 +1,42 @@
 import os
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-
-TEST_DB_PATH = Path(__file__).parent / "test_lms.sqlite3"
-
-os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
+os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["JWT_SECRET"] = "test-readiness-secret"
+
+import app.database as database_module  # noqa: E402
+
+test_engine = create_engine(
+    "sqlite://",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+test_session_local = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=test_engine,
+)
+
+database_module.engine = test_engine
+database_module.SessionLocal = test_session_local
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
 import app.models  # noqa: E402,F401
+import app.models.user  # noqa: E402,F401
+import app.models.course  # noqa: E402,F401
+import app.models.classroom  # noqa: E402,F401
+import app.models.enrollment  # noqa: E402,F401
+import app.models.instructor_enrollment  # noqa: E402,F401
+import app.models.session  # noqa: E402,F401
+import app.models.attendance  # noqa: E402,F401
+import app.models.module  # noqa: E402,F401
+import app.models.assignment  # noqa: E402,F401
+import app.models.schedule  # noqa: E402,F401
 from app.main import app  # noqa: E402
 
 
