@@ -26,6 +26,7 @@ Student views:
 Instructor grading:
   PUT  /assignments/{id}/submissions/{sub_id}/grade  → assign grade + feedback
 """
+from datetime import datetime, timezone
 
 import os, shutil, uuid
 from datetime import datetime, timezone
@@ -497,101 +498,46 @@ def my_assignments(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Returns all assignments visible to the logged-in student based on their 
-    active enrollments, accompanied by a dynamically evaluated completion status.
-    """
     require_student(current_user)
 
-    # Ensure comparisons use a consistent timezone-aware datetime (UTC)
-    now = datetime.now(timezone.utc)
-    student_id = current_user["user_id"]
-
     enrollments = db.query(Enrollment).filter(
-        Enrollment.user_id == student_id,
+        Enrollment.user_id == current_user["user_id"],
         Enrollment.status == "ongoing"
     ).all()
 
-    # Pre-fetch all submissions for this user to avoid making N separate queries inside the loop
-    student_submissions = db.query(AssignmentSubmission).filter(
-        AssignmentSubmission.student_user_id == student_id
-    ).all()
-    
-    # Map by assignment_id for fast O(1) lookups
-    submission_map = {sub.assignment_id: sub for sub in student_submissions}
-
-    output_assignments = []
+    result = []
 
     for en in enrollments:
-        classroom = (
-            db.query(Classroom)
-            .filter(Classroom.id == en.classroom_id)
-            .first()
-        )
 
-        if not classroom:
-            continue
+        assignments = db.query(Assignment).filter(
+            Assignment.course_id == en.classroom.course_id,
+            Assignment.batch_name == en.classroom.batch_name
+        ).all()
 
-        batch_assignments = (
-            db.query(Assignment)
-            .filter(
-                Assignment.course_id == classroom.course_id,
-                Assignment.batch_name == classroom.batch_name
-            )
-            .order_by(Assignment.created_at.desc())
-            .all()
-        )
+        for assignment in assignments:
 
-        for a in batch_assignments:
-            submission = submission_map.get(a.id)
-            
-            # Ensure our database assignment due_date is treated as timezone-aware for clean comparison
-            assignment_due = a.due_date
-            if assignment_due and assignment_due.tzinfo is None:
-                assignment_due = assignment_due.replace(tzinfo=timezone.utc)
+            course = db.query(Course).filter(
+                Course.id == assignment.course_id
+            ).first()
 
-            # ── Dynamic Status Evaluation Logic ──
-            if submission:
-                if submission.status == "graded" or submission.grade is not None:
-                    calculated_status = "graded"
-                else:
-                    # Check if the student's submission timestamp was past the due date
-                    submission_time = submission.submitted_at
-                    if submission_time and submission_time.tzinfo is None:
-                        submission_time = submission_time.replace(tzinfo=timezone.utc)
-                    
-                    if assignment_due and submission_time > assignment_due:
-                        calculated_status = "late submitted"
-                    else:
-                        calculated_status = "submitted"
-            else:
-                # No submission exists yet
-                if assignment_due and now > assignment_due:
-                    calculated_status = "overdue"
-                else:
-                    calculated_status = "in progress"
+            module = db.query(Module).filter(
+                Module.id == assignment.module_id
+            ).first()
 
-            # Package custom payload payload response
-            output_assignments.append({
-                "id": a.id,
-                "course_id": a.course_id,
-                "batch_name": a.batch_name,
-                "module_id": a.module_id,
-                "module_title": a.module.title if a.module else None,
-                "title": a.title,
-                "description": a.description,
-                "objective": a.objective,
-                "expected_outcome": a.expected_outcome,
-                "due_date": a.due_date,
-                "created_at": a.created_at,
-                "status": calculated_status,
-                "grade": submission.grade if submission else None,
-                "feedback": submission.feedback if submission else None,
-                "submitted_at": submission.submitted_at if submission else None
+            result.append({
+                "assignment_id": assignment.id,
+                "title": assignment.title,
+                "description": assignment.description,
+                "course_id": assignment.course_id,
+                "course_name": course.name if course else None,
+                "module_id": assignment.module_id,
+                "module_name": module.title if module else None,
+                "batch_name": assignment.batch_name,
+                "due_date": assignment.due_date,
+                "created_at": assignment.created_at
             })
 
-    return output_assignments
-
+    return result
 
     
 
@@ -758,6 +704,7 @@ def submit_assignment(
             shutil.copyfileobj(file.file, f_out)
         saved_path = dest
         saved_name = file.filename
+    submitted_at=datetime.now(timezone.utc)
 
     if sub:
         sub.submission_text = submission_text
@@ -992,4 +939,135 @@ def assignment_details(
             }
             for r in resources
         ]
+    }
+@router.get("/{assignment_id}/submitted-resources")
+def get_assignment_submissions(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    assignment = db.query(Assignment).filter(
+        Assignment.id == assignment_id
+    ).first()
+
+    if not assignment:
+        raise HTTPException(
+            status_code=404,
+            detail="Assignment not found"
+        )
+
+    submissions = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.assignment_id ==
+        assignment_id
+    ).all()
+
+    result = []
+
+    for sub in submissions:
+
+        student = db.query(User).filter(
+            User.id == sub.student_user_id
+        ).first()
+
+        result.append({
+            "submission_id": sub.id,
+            "student_id": student.student_id if student else None,
+            "student_name": student.name if student else None,
+            "submitted_at": sub.submitted_at,
+            "status": sub.status,
+            "grade": sub.grade,
+            "file_name": sub.file_name,
+            "has_file": bool(sub.file_path)
+        })
+
+    return {
+        "assignment_id": assignment.id,
+        "title": assignment.title,
+        "total_submissions": len(result),
+        "submissions": result
+    }
+
+
+@router.get("/{assignment_id}/submitted-resources")
+def get_assignment_submissions(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    assignment = db.query(Assignment).filter(
+        Assignment.id == assignment_id
+    ).first()
+
+    if not assignment:
+        raise HTTPException(
+            status_code=404,
+            detail="Assignment not found"
+        )
+
+    submissions = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.assignment_id ==
+        assignment_id
+    ).all()
+
+    result = []
+
+    for sub in submissions:
+
+        student = db.query(User).filter(
+            User.id == sub.student_user_id
+        ).first()
+
+        result.append({
+            "submission_id": sub.id,
+            "student_id": student.student_id if student else None,
+            "student_name": student.name if student else None,
+            "submitted_at": sub.submitted_at,
+            "status": sub.status,
+            "grade": sub.grade,
+            "file_name": sub.file_name,
+            "has_file": bool(sub.file_path)
+        })
+
+    return {
+        "assignment_id": assignment.id,
+        "title": assignment.title,
+        "total_submissions": len(result),
+        "submissions": result
+    }
+
+@router.get("/submission/{submission_id}")
+def get_submission_details(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    submission = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.id == submission_id
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
+
+    student = db.query(User).filter(
+        User.id == submission.student_user_id
+    ).first()
+
+    return {
+        "submission_id": submission.id,
+        "student_id": student.student_id if student else None,
+        "student_name": student.name if student else None,
+        "submission_text": submission.submission_text,
+        "file_name": submission.file_name,
+        "grade": submission.grade,
+        "feedback": submission.feedback,
+        "submitted_at": submission.submitted_at
     }

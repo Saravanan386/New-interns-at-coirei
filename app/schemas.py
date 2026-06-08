@@ -715,3 +715,63 @@ class SubmissionReviewResponse(BaseModel):
     status: str
     answers: List[AnswerReviewItem]
 
+
+
+
+class AnnouncementCreate(BaseModel):
+    course_id: int
+    classroom_id: Optional[int] = None
+    topic: str
+    message: str
+
+class AnnouncementResponse(BaseModel):
+    id: int
+    course_id: int
+    classroom_id: Optional[int]
+    topic: str
+    message: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InstructorProfileUpdate(BaseModel):
+    bio: Optional[str] = Field(default=None, max_length=5000)
+    qualifications: Optional[List[str]] = None
+    experience_years: Optional[int] = Field(default=None, ge=0, le=80)
+    profile_image_url: Optional[str] = Field(default=None, max_length=500)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "bio": "Senior Full-Stack Developer and technical trainer.",
+                "qualifications": ["B.Tech CSE", "M.Tech IT"],
+                "experience_years": 5
+            }
+        }
+    )
+
+class StudentAssignmentRow(BaseModel):
+    """Used in GET /instructor/assignments responses"""
+    student_id: str         # Map this to stringified student_info.id or user.id
+    student_name: str       # Map to user.name
+    status: str            # 'pending' | 'submitted' | 'graded'
+    submitted_at: Optional[datetime]
+    grade: Optional[str]
+    submission_id: Optional[int]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentRowResponse(BaseModel):
+    """Used inside TestDetailResponse arrays"""
+    sno: int
+    student_id: str         # Map this to stringified student_info.id or user.id
+    student_name: str       # Map to user.name
+    start_time: Optional[str]
+    end_time: Optional[str]
+    status: str
+    mark: Optional[float]
+    submission_id: Optional[int]
+
+    model_config = ConfigDict(from_attributes=True)

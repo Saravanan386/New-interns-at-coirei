@@ -1,11 +1,9 @@
-# app/routers/dashboard.py
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from datetime import datetime
 
 from app.database import get_db
-
 from app.utils.security import get_current_user
 
 from app.models.user import User
@@ -13,310 +11,205 @@ from app.models.course import Course
 from app.models.classroom import Classroom
 from app.models.enrollment import Enrollment
 from app.models.instructor_enrollment import InstructorEnrollment
-from app.models.session import ClassSession
-from app.models.attendance import SessionParticipant
-
-# Optional modules
+from app.models.module import Module, Chapter
+from app.models.chapter_resources import ChapterResource
 from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.test import Test, TestSubmission
+from app.models.session import ClassSession
+from app.models.attendance import SessionParticipant
+from app.models.announcements import Announcement
+from app.models.registration_profile import InstructorInformation, StudentInformation
 
 router = APIRouter(
-    prefix="/dashboard/admin",
-    tags=["Instructor Dashboard"]
+    prefix="/instructor",
+    tags=["Instructor"]
 )
 
-
-# ============================================================================
-# HELPER
-# ============================================================================
-
-def get_instructor_classrooms(
-    db: Session,
-    user_id: int
-):
-    return (
-        db.query(
-            InstructorEnrollment,
-            Classroom,
-            Course
-        )
-        .join(
-            Classroom,
-            Classroom.id == InstructorEnrollment.classroom_id
-        )
-        .join(
-            Course,
-            Course.id == Classroom.course_id
-        )
-        .filter(
-            InstructorEnrollment.user_id == user_id
-        )
+def get_my_classroom_ids(db: Session, instructor_id: int) -> list[int]:
+    rows = (
+        db.query(InstructorEnrollment.classroom_id)
+        .filter(InstructorEnrollment.user_id == instructor_id)
         .all()
     )
+    return [r.classroom_id for r in rows]
 
 
-# ============================================================================
-# DASHBOARD OVERVIEW
-# ============================================================================
 
-@router.get("/")
-def instructor_dashboard(
+@router.get("/dashboard/summary")
+def get_dashboard_summary(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user=Depends(get_current_user)
 ):
-
-    if current_user["role"] != "instructor":
-        raise HTTPException(
-            status_code=403,
-            detail="Instructor access only"
-        )
-
-    user_id = current_user["user_id"]
-
-    instructor_rows = get_instructor_classrooms(
-        db,
-        user_id
-    )
-
-    if not instructor_rows:
-        return {
-            "summary": {
-                "active_courses": 0,
-                "total_students": 0,
-                "live_sessions": 0,
-                "pending_reviews": 0
-            },
-            "courses": [],
-            "recent_sessions": [],
-            "live_classes": [],
-            "recent_tests": []
-        }
-
-    classroom_ids = list({
-        row.Classroom.id
-        for row in instructor_rows
-    })
-
-    course_ids = list({
-        row.Course.id
-        for row in instructor_rows
-    })
-
-    # ------------------------------------------------------------------------
-    # SUMMARY
-    # ------------------------------------------------------------------------
-
+    classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
+    
+    # 1. Total unique students across all their classrooms
     total_students = (
-        db.query(
-            func.count(
-                func.distinct(Enrollment.user_id)
-            )
-        )
-        .filter(
-            Enrollment.classroom_id.in_(classroom_ids)
-        )
-        .scalar()
-    ) or 0
-
-    live_sessions = (
+        db.query(func.count(Enrollment.user_id.distinct()))
+        .filter(Enrollment.classroom_id.in_(classroom_ids))
+        .scalar() or 0
+    )
+    
+    # 2. Upcoming classes (scheduled start time greater than current time)
+    upcoming_classes = (
         db.query(ClassSession)
         .filter(
             ClassSession.classroom_id.in_(classroom_ids),
-            ClassSession.status == "live"
+            ClassSession.start_time >= datetime.utcnow(),
+            ClassSession.status == "scheduled"
         )
         .count()
     )
-
-    pending_reviews = 0
-
-    try:
-        pending_reviews = (
-            db.query(AssignmentSubmission)
-            .join(
-                Assignment,
-                Assignment.id == AssignmentSubmission.assignment_id
-            )
-            .filter(
-                Assignment.created_by == user_id,
-                AssignmentSubmission.status == "submitted"
-            )
-            .count()
-        )
-    except:
-        pass
-
-    summary = {
-        "active_courses": len(course_ids),
-        "total_students": total_students,
-        "live_sessions": live_sessions,
-        "pending_reviews": pending_reviews
-    }
-
-    # ------------------------------------------------------------------------
-    # COURSES
-    # ------------------------------------------------------------------------
-
-    courses_data = []
-
-    for row in instructor_rows:
-
-        classroom = row.Classroom
-        course = row.Course
-
-        student_count = (
-            db.query(Enrollment)
-            .filter(
-                Enrollment.classroom_id == classroom.id
-            )
-            .count()
-        )
-
-        courses_data.append({
-            "classroom_id": classroom.id,
-            "course_id": course.id,
-            "course_name": course.name,
-            "course_code": course.course_code,
-            "batch_name": classroom.batch_name,
-            "room_name": classroom.room_name,
-            "students": student_count
-        })
-
-    # ------------------------------------------------------------------------
-    # RECENT SESSIONS
-    # ------------------------------------------------------------------------
-
-    sessions = (
-        db.query(ClassSession)
+    
+    # 3. Submissions awaiting review
+    pending_reviews = (
+        db.query(func.count(AssignmentSubmission.id))
+        .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
         .filter(
-            ClassSession.classroom_id.in_(classroom_ids)
+            Assignment.classroom_id.in_(classroom_ids), # Assumes classroom tracking or join on course
+            AssignmentSubmission.status == "submitted"
         )
-        .order_by(
-            ClassSession.id.desc()
-        )
-        .limit(5)
-        .all()
+        .scalar() or 0
     )
-
-    recent_sessions = []
-
-    for session in sessions:
-
-        classroom = db.query(Classroom).filter(
-            Classroom.id == session.classroom_id
-        ).first()
-
-        present_count = (
-            db.query(SessionParticipant)
-            .filter(
-                SessionParticipant.session_id == session.id,
-                SessionParticipant.status == "present"
-            )
-            .count()
-        )
-
-        total_enrolled = (
-            db.query(Enrollment)
-            .filter(
-                Enrollment.classroom_id == session.classroom_id
-            )
-            .count()
-        )
-
-        recent_sessions.append({
-            "session_id": session.id,
-            "batch_name": classroom.batch_name if classroom else None,
-            "status": session.status,
-            "start_time": session.start_time,
-            "end_time": session.end_time,
-            "attendance": {
-                "present": present_count,
-                "total": total_enrolled
-            }
-        })
-
-    # ------------------------------------------------------------------------
-    # LIVE CLASSES
-    # ------------------------------------------------------------------------
-
-    live_class_rows = (
-        db.query(ClassSession)
-        .filter(
-            ClassSession.classroom_id.in_(classroom_ids),
-            ClassSession.status == "live"
-        )
-        .all()
-    )
-
-    live_classes = []
-
-    for session in live_class_rows:
-
-        classroom = db.query(Classroom).filter(
-            Classroom.id == session.classroom_id
-        ).first()
-
-        live_classes.append({
-            "session_id": session.id,
-            "batch_name": classroom.batch_name if classroom else None,
-            "join_url": session.host_url,
-            "status": session.status,
-            "start_time": session.start_time
-        })
-
-    # ------------------------------------------------------------------------
-    # TESTS
-    # ------------------------------------------------------------------------
-
-    recent_tests = []
-
-    try:
-
-        tests = (
-            db.query(Test)
-            .filter(
-                Test.classroom_id.in_(classroom_ids)
-            )
-            .order_by(
-                Test.id.desc()
-            )
-            .limit(5)
-            .all()
-        )
-
-        for test in tests:
-
-            submissions = (
-                db.query(TestSubmission)
-                .filter(
-                    TestSubmission.test_id == test.id
-                )
-                .count()
-            )
-
-            passed = (
-                db.query(TestSubmission)
-                .filter(
-                    TestSubmission.test_id == test.id,
-                    TestSubmission.is_passed == True
-                )
-                .count()
-            )
-
-            recent_tests.append({
-                "test_id": test.id,
-                "title": test.title,
-                "submissions": submissions,
-                "passed": passed,
-                "failed": submissions - passed
-            })
-
-    except:
-        pass
 
     return {
-        "summary": summary,
-        "courses": courses_data,
-        "recent_sessions": recent_sessions,
-        "live_classes": live_classes,
-        "recent_tests": recent_tests
+        "total_students": total_students,
+        "total_active_batches": len(classroom_ids),
+        "upcoming_classes": upcoming_classes,
+        "recent_submissions_to_grade": pending_reviews
     }
+
+@router.get("/my-assignments")
+def my_assignments(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
+    
+    # Load classrooms along with their courses in an optimization step
+    classrooms = db.query(Classroom).filter(Classroom.id.in_(classroom_ids)).all()
+    course_ids = [c.course_id for c in classrooms if c.course_id]
+    
+    courses_map = {
+        course.id: course 
+        for course in db.query(Course).filter(Course.id.in_(course_ids)).all()
+    }
+
+    result = []
+    for c in classrooms:
+        course = courses_map.get(c.course_id)
+        result.append({
+            "classroom_id": c.id,
+            "batch_name": c.batch_name,
+            "course_id": course.id if course else None,
+            "course_name": course.name if course else "Unknown",
+            "course_code": course.course_code if course else ""
+        })
+
+    return result
+
+@router.get("/students")
+def get_students(
+    search: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
+    
+    # Join User with StudentInformation to handle profiling context safely
+    query = (
+        db.query(User, StudentInformation)
+        .join(Enrollment, Enrollment.user_id == User.id)
+        .join(StudentInformation, StudentInformation.user_id == User.id, isouter=True)
+        .filter(Enrollment.classroom_id.in_(classroom_ids))
+    )
+    
+    if search:
+        search_filter = f"%{search.lower()}%"
+        query = query.filter(
+            func.lower(User.name).like(search_filter)
+        )
+        
+    records = query.distinct().all()
+    result = []
+    
+    for user, student_info in records:
+        result.append({
+            "id": user.id,
+            "student_id": student_info.id if student_info else user.id, # Uses table context safely
+            "name": user.name,
+            "attendance_percentage": "0%", 
+            "last_score": None,
+            "recent_submissions": []
+        })
+        
+    return result
+
+@router.get("/students/{student_id}/profile")
+def student_profile(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    profile = db.query(StudentInformation).filter(StudentInformation.user_id == student.id).first()
+    
+    total_sessions = db.query(SessionParticipant).filter(SessionParticipant.user_id == student.id).count()
+    attended = db.query(SessionParticipant).filter(
+        SessionParticipant.user_id == student.id,
+        SessionParticipant.status == "present"
+    ).count()
+
+    attendance_percent = round(attended * 100 / total_sessions, 2) if total_sessions else 0
+
+    submissions = db.query(AssignmentSubmission).filter(AssignmentSubmission.student_user_id == student.id).all()
+    tests = db.query(TestSubmission).filter(TestSubmission.student_user_id == student.id).all()
+
+    return {
+        "id": student.id,
+        "student_id": profile.id if profile else student.id, # Fixed attribute missing issue
+        "name": student.name,
+        "email": profile.email if profile else student.email,
+        "contact": profile.phone_number if profile else None,
+        "stats": {
+            "overall_attendance": f"{attendance_percent}%",
+            "average_score": "0%",
+            "live_participation": "Good",
+            "classes_attended": attended
+        },
+        "assignment_performance": submissions,
+        "test_performance": tests,
+        "attendance_details": [],
+        "recent_activity": []
+    }
+
+@router.get("/resources/instructor")
+def instructor_resources(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
+    classrooms = db.query(Classroom).filter(Classroom.id.in_(classroom_ids)).all()
+    course_ids = [c.course_id for c in classrooms if c.course_id]
+
+    # Scope resources strictly through modules belonging to courses the instructor handles
+    resources = (
+        db.query(ChapterResource)
+        .join(Chapter, Chapter.id == ChapterResource.chapter_id)
+        .join(Module, Module.id == Chapter.module_id)
+        .filter(Module.course_id.in_(course_ids))
+        .order_by(ChapterResource.uploaded_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "resource_id": r.id,
+            "name": r.file_name,
+            "download_url": r.file_path,
+            "uploaded_at": r.uploaded_at
+        }
+        for r in resources
+    ]

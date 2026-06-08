@@ -11,8 +11,13 @@ from datetime import datetime
 from app.models.schedule import CourseSchedule
 from app.models.instructor_enrollment import InstructorEnrollment
 from sqlalchemy.orm import joinedload
+from app.models.module import Module
+from app.models.module import Chapter
 
-
+from app.models.assignment import Assignment
+from app.models.assignment import AssignmentSubmission
+from app.models.test import Test
+from app.models.test import TestSubmission
 from app.database import get_db
 from app.schemas import (
     CourseCreate,
@@ -705,5 +710,239 @@ def course_full_overview(
             }
 
             for s in upcoming_sessions
+        ]
+    }
+
+
+@router.get("/{course_id}/student-overview")
+def student_course_overview(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+
+    course = db.query(Course).filter(
+        Course.id == course_id
+    ).first()
+
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
+
+    # Verify student is enrolled
+
+    enrollment = (
+        db.query(Enrollment)
+        .join(
+            Classroom,
+            Classroom.id == Enrollment.classroom_id
+        )
+        .filter(
+            Enrollment.user_id ==
+            current_user["user_id"],
+            Classroom.course_id ==
+            course_id
+        )
+        .first()
+    )
+
+    if not enrollment:
+        raise HTTPException(
+            status_code=403,
+            detail="Not enrolled in this course"
+        )
+
+    modules = (
+        db.query(Module)
+        .filter(
+            Module.course_id == course_id
+        )
+        .all()
+    )
+
+    module_ids = [m.id for m in modules]
+
+    chapters = []
+
+    if module_ids:
+        chapters = (
+            db.query(Chapter)
+            .filter(
+                Chapter.module_id.in_(module_ids)
+            )
+            .all()
+        )
+
+    chapter_ids = [c.id for c in chapters]
+
+  
+
+    assignments = (
+        db.query(Assignment)
+        .filter(
+            Assignment.course_id == course_id
+        )
+        .all()
+    )
+
+    tests = (
+        db.query(Test)
+        .filter(
+            Test.course_id == course_id
+        )
+        .all()
+    )
+
+    assignment_ids = [a.id for a in assignments]
+
+    test_ids = [t.id for t in tests]
+
+    submitted_assignments = (
+        db.query(AssignmentSubmission)
+        .filter(
+            AssignmentSubmission.student_user_id
+            ==
+            current_user["user_id"]
+        )
+        .all()
+    )
+
+    submitted_assignment_ids = [
+        s.assignment_id
+        for s in submitted_assignments
+    ]
+
+    test_submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.student_user_id
+            ==
+            current_user["user_id"]
+        )
+        .all()
+    )
+
+    completed_test_ids = [
+        t.test_id
+        for t in test_submissions
+    ]
+
+    return {
+
+        "course": {
+
+            "id": course.id,
+
+            "course_code":
+            course.course_code,
+
+            "name":
+            course.name,
+
+            "description":
+            course.description,
+
+            "duration_months":
+            course.duration_months,
+
+            "total_lessons":
+            course.total_lessons
+        },
+
+        "stats": {
+
+            "total_modules":
+            len(modules),
+
+            "total_chapters":
+            len(chapters),
+
+
+            "total_assignments":
+            len(assignments),
+
+            "total_tests":
+            len(tests),
+
+            "completed_assignments":
+            len(submitted_assignment_ids),
+
+            "completed_tests":
+            len(completed_test_ids),
+
+            "progress_percent":
+            enrollment.progress_percent
+        },
+
+        "modules": [
+
+            {
+                "module_id": m.id,
+                "title": m.title,
+                "order": m.order
+            }
+
+            for m in modules
+        ],
+
+        "chapters": [
+
+            {
+                "chapter_id": c.id,
+                "module_id": c.module_id,
+                "title": c.title,
+                "order": c.order
+            }
+
+            for c in chapters
+        ],
+
+
+        "assignments": [
+
+            {
+                "assignment_id": a.id,
+
+                "module_id":
+                a.module_id,
+
+                "title":
+                a.title,
+
+                "due_date":
+                a.due_date,
+
+                "submitted":
+                a.id in submitted_assignment_ids
+            }
+
+            for a in assignments
+        ],
+
+        "tests": [
+
+            {
+                "test_id":
+                t.id,
+
+                "module_id":
+                t.module_id,
+
+                "title":
+                t.title,
+
+                "start_time":
+                t.start_time,
+
+                "end_time":
+                t.end_time,
+
+                "completed":
+                t.id in completed_test_ids
+            }
+
+            for t in tests
         ]
     }

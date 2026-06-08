@@ -8,6 +8,8 @@ from .assignment import Assignment, AssignmentResource, AssignmentSubmission
 from .enrollment import Enrollment
 from .test import Test
 from .notification import Notification
+from .announcements import Announcement
+
 
 
 

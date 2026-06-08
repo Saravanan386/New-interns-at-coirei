@@ -115,6 +115,7 @@ def my_courses(
         {
             "course_id": course.id,
             "course_name": course.name,
+            "course_code":course.course_code,
             "classroom_id": classroom.id,
             "batch_name": classroom.batch_name,
             "room_name": classroom.room_name,
@@ -204,4 +205,234 @@ def attendance_summary(
         "present_classes": present,
         "absent_classes": absent,
         "attendance_percentage": percentage
+    }
+
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.utils.security import get_current_user
+
+from app.models.user import User
+from app.models.course import Course
+from app.models.classroom import Classroom
+from app.models.enrollment import Enrollment
+from app.models.assignment import Assignment, AssignmentSubmission
+from app.models.test import Test, TestSubmission
+from app.models.module import Module, Chapter
+from app.models.session import ClassSession
+from app.models.attendance import SessionParticipant
+from app.models.registration_profile import StudentInformation
+
+def check_student(current_user):
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Student only"
+        )
+
+
+@router.get("/profile-summary")
+def profile_summary(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    student_id = current_user["user_id"]
+
+    user = db.query(User).filter(
+        User.id == student_id
+    ).first()
+
+    profile = db.query(StudentInformation).filter(
+        StudentInformation.user_id == student_id
+    ).first()
+
+    enrollments = db.query(Enrollment).filter(
+        Enrollment.user_id == student_id,
+        Enrollment.status == "ongoing"
+    ).all()
+
+    course_ids = []
+    classroom_ids = []
+
+    for e in enrollments:
+        classroom_ids.append(e.classroom_id)
+
+        classroom = db.query(Classroom).filter(
+            Classroom.id == e.classroom_id
+        ).first()
+
+        if classroom:
+            course_ids.append(classroom.course_id)
+
+    course_ids = list(set(course_ids))
+
+    total_courses = len(course_ids)
+
+    courses_data = []
+
+    total_modules = 0
+    total_chapters = 0
+
+    for course_id in course_ids:
+
+        course = db.query(Course).filter(
+            Course.id == course_id
+        ).first()
+
+        modules = db.query(Module).filter(
+            Module.course_id == course_id
+        ).all()
+
+        module_count = len(modules)
+
+        chapter_count = sum(
+            len(m.chapters)
+            for m in modules
+        )
+
+        total_modules += module_count
+        total_chapters += chapter_count
+
+        courses_data.append({
+            "course_id": course.id,
+            "course_code": course.course_code,
+            "course_name": course.name,
+            "duration_months": course.duration_months,
+            "module_count": module_count,
+            "chapter_count": chapter_count
+        })
+
+    total_classes = db.query(ClassSession).filter(
+        ClassSession.classroom_id.in_(classroom_ids)
+    ).count()
+
+    attended_classes = db.query(SessionParticipant).filter(
+        SessionParticipant.user_id == student_id,
+        SessionParticipant.status == "present"
+    ).count()
+
+    attendance_percentage = 0
+
+    if total_classes > 0:
+        attendance_percentage = round(
+            (attended_classes / total_classes) * 100,
+            2
+        )
+
+    assignments = db.query(Assignment).filter(
+        Assignment.course_id.in_(course_ids)
+    ).all()
+
+    assignment_ids = [a.id for a in assignments]
+
+    submissions = db.query(AssignmentSubmission).filter(
+        AssignmentSubmission.student_user_id == student_id
+    ).all()
+
+    submitted_assignment_ids = [
+        s.assignment_id
+        for s in submissions
+    ]
+
+    pending_assignments = len(
+        [
+            a for a in assignments
+            if a.id not in submitted_assignment_ids
+        ]
+    )
+
+    tests = db.query(Test).filter(
+        Test.course_id.in_(course_ids)
+    ).all()
+
+    test_ids = [t.id for t in tests]
+
+    test_submissions = db.query(TestSubmission).filter(
+        TestSubmission.student_user_id == student_id
+    ).all()
+
+    submitted_tests = len(
+        [
+            t for t in test_submissions
+            if t.status == "submitted"
+        ]
+    )
+
+    passed_tests = len(
+        [
+            t for t in test_submissions
+            if t.is_passed
+        ]
+    )
+
+    failed_tests = len(
+        [
+            t for t in test_submissions
+            if t.is_passed is False
+        ]
+    )
+
+    avg_score = 0
+
+    scores = [
+        t.score_percentage
+        for t in test_submissions
+        if t.score_percentage is not None
+    ]
+
+    if scores:
+        avg_score = round(
+            sum(scores) / len(scores),
+            2
+        )
+
+    return {
+
+        "profile": {
+            "user_id": user.id,
+            "student_id": user.student_id,
+            "name": user.name,
+            "email": user.email,
+            "phone": (
+                profile.phone_number
+                if profile
+                else None
+            ),
+            "profile_image": (
+                profile.profile_image_url
+                if profile
+                else None
+            ),
+            "status": (
+                profile.account_status
+                if profile
+                else "active"
+            )
+        },
+
+        "summary": {
+            "courses": total_courses,
+            "modules": total_modules,
+            "chapters": total_chapters,
+
+            "classes_total": total_classes,
+            "classes_attended": attended_classes,
+            "attendance_percentage": attendance_percentage,
+
+            "assignments_total": len(assignments),
+            "assignments_pending": pending_assignments,
+            "assignments_submitted": len(submissions),
+
+            "tests_total": len(tests),
+            "tests_attempted": submitted_tests,
+            "tests_passed": passed_tests,
+            "tests_failed": failed_tests,
+            "average_test_score": avg_score
+        },
+
+        "courses": courses_data
     }

@@ -1202,3 +1202,127 @@ def test_students(
         })
 
     return result
+
+
+@router.get("/student/available")
+def student_available_tests(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    # Get student's active enrollments
+    enrollments = (
+        db.query(Enrollment)
+        .join(
+            Classroom,
+            Classroom.id == Enrollment.classroom_id
+        )
+        .filter(
+            Enrollment.user_id == current_user["user_id"],
+            Enrollment.status == "ongoing"
+        )
+        .all()
+    )
+
+    results = []
+
+    for enrollment in enrollments:
+
+        classroom = (
+            db.query(Classroom)
+            .filter(
+                Classroom.id == enrollment.classroom_id
+            )
+            .first()
+        )
+
+        if not classroom:
+            continue
+
+        tests = (
+            db.query(Test)
+            .filter(
+                Test.course_id == classroom.course_id,
+                Test.batch_name == classroom.batch_name
+            )
+            .all()
+        )
+
+        for test in tests:
+
+            submission = (
+                db.query(TestSubmission)
+                .filter(
+                    TestSubmission.test_id == test.id,
+                    TestSubmission.student_user_id ==
+                    current_user["user_id"]
+                )
+                .first()
+            )
+
+            if not submission:
+                status = "not_started"
+
+            elif submission.status == "in_progress":
+                status = "in_progress"
+
+            else:
+                status = "completed"
+
+            results.append({
+
+                "test_id": test.id,
+
+                "title": test.title,
+
+                "description": test.description,
+
+                "course": {
+                    "id": test.course.id
+                    if test.course else None,
+
+                    "name": test.course.name
+                    if test.course else None
+                },
+
+                "module": {
+                    "id": test.module.id
+                    if test.module else None,
+
+                    "name": test.module.title
+                    if test.module else None
+                },
+
+                "batch_name": test.batch_name,
+
+                "start_time": test.start_time,
+
+                "end_time": test.end_time,
+
+                "total_questions": len(test.questions),
+
+                "status": status,
+
+                "submission_id":
+                    submission.id
+                    if submission else None,
+
+                "obtained_marks":
+                    submission.obtained_marks
+                    if submission else None,
+
+                "total_marks":
+                    submission.total_marks
+                    if submission else None,
+
+                "percentage":
+                    submission.score_percentage
+                    if submission else None,
+
+                "is_passed":
+                    submission.is_passed
+                    if submission else None
+            })
+
+    return results
