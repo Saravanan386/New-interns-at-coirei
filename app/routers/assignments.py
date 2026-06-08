@@ -509,9 +509,16 @@ def my_assignments(
 
     for en in enrollments:
 
+        classroom = db.query(Classroom).filter(
+            Classroom.id == en.classroom_id
+        ).first()
+
+        if not classroom:
+            continue
+
         assignments = db.query(Assignment).filter(
-            Assignment.course_id == en.classroom.course_id,
-            Assignment.batch_name == en.classroom.batch_name
+            Assignment.course_id == classroom.course_id,
+            Assignment.batch_name == classroom.batch_name
         ).all()
 
         for assignment in assignments:
