@@ -42,14 +42,22 @@ def get_dashboard_summary(
 ):
     classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
     
-    # 1. Total unique students across all their classrooms
+    if not classroom_ids:
+        return {
+            "total_students": 0,
+            "total_active_batches": 0,
+            "upcoming_classes": 0,
+            "recent_submissions_to_grade": 0
+        }
+
+    # 1. Compute total active student metrics
     total_students = (
         db.query(func.count(Enrollment.user_id.distinct()))
         .filter(Enrollment.classroom_id.in_(classroom_ids))
         .scalar() or 0
     )
     
-    # 2. Upcoming classes (scheduled start time greater than current time)
+    # 2. Upcoming scheduled sessions tracker
     upcoming_classes = (
         db.query(ClassSession)
         .filter(
@@ -60,16 +68,28 @@ def get_dashboard_summary(
         .count()
     )
     
-    # 3. Submissions awaiting review
-    pending_reviews = (
-        db.query(func.count(AssignmentSubmission.id))
-        .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
-        .filter(
-            Assignment.classroom_id.in_(classroom_ids), # Assumes classroom tracking or join on course
-            AssignmentSubmission.status == "submitted"
-        )
-        .scalar() or 0
-    )
+    # 3. Pull structural criteria parameters from handled classrooms
+    classrooms = db.query(Classroom).filter(Classroom.id.in_(classroom_ids)).all()
+    
+    pending_reviews = 0
+    if classrooms:
+        # Build composite mapping parameters to map assignment scope correctly
+        filters = []
+        for c in classrooms:
+            if c.course_id and c.batch_name:
+                filters.append((Assignment.course_id == c.course_id) & (Assignment.batch_name == c.batch_name))
+        
+        if filters:
+            from sqlalchemy import or_
+            pending_reviews = (
+                db.query(func.count(AssignmentSubmission.id))
+                .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
+                .filter(
+                    AssignmentSubmission.status == "submitted",
+                    or_(*filters)
+                )
+                .scalar() or 0
+            )
 
     return {
         "total_students": total_students,
@@ -115,28 +135,40 @@ def get_students(
 ):
     classroom_ids = get_my_classroom_ids(db, current_user["user_id"])
     
-    # Join User with StudentInformation to handle profiling context safely
+    if not classroom_ids:
+        return []
+
+    # Query distinct User profiles directly to dodge JSON sorting crashes in Postgres
     query = (
-        db.query(User, StudentInformation)
+        db.query(User)
         .join(Enrollment, Enrollment.user_id == User.id)
-        .join(StudentInformation, StudentInformation.user_id == User.id, isouter=True)
         .filter(Enrollment.classroom_id.in_(classroom_ids))
     )
     
     if search:
-        search_filter = f"%{search.lower()}%"
-        query = query.filter(
-            func.lower(User.name).like(search_filter)
-        )
+        search_filter = f"%{search.strip().lower()}%"
+        query = query.filter(func.lower(User.name).like(search_filter))
         
-    records = query.distinct().all()
-    result = []
+    students = query.distinct().all()
+    student_ids = [s.id for s in students]
+
+    # Batch query profile metadata out of the loop to bypass N+1 performance lag
+    profiles_map = {}
+    if student_ids:
+        profiles = (
+            db.query(StudentInformation)
+            .filter(StudentInformation.user_id.in_(student_ids))
+            .all()
+        )
+        profiles_map = {p.user_id: p for p in profiles}
     
-    for user, student_info in records:
+    result = []
+    for s in students:
+        prof = profiles_map.get(s.id)
         result.append({
-            "id": user.id,
-            "student_id": student_info.id if student_info else user.id, # Uses table context safely
-            "name": user.name,
+            "id": s.id,
+            "student_id": str(prof.id) if prof else str(s.id), 
+            "name": s.name,
             "attendance_percentage": "0%", 
             "last_score": None,
             "recent_submissions": []
