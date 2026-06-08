@@ -11,7 +11,18 @@ from app.models.session import ClassSession
 from app.models.attendance import SessionParticipant
 
 from app.utils.security import get_current_user
+def require_student(current_user: dict):
+    """
+    Ensures the current user is a student.
+    Raises 403 if not.
+    """
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Student access only"
+        )
 
+    return True
 router = APIRouter(
     prefix="/dashboard/student",
     tags=["Student Dashboard"]
@@ -445,7 +456,7 @@ from sqlalchemy import func, case, and_
 from datetime import datetime
 
 from app.database import get_db
-from app.utils.security import get_current_user, require_student
+from app.utils.security import get_current_user
 from app.models.user import User
 from app.models.enrollment import Enrollment
 from app.models.classroom import Classroom
