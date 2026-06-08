@@ -375,7 +375,7 @@ def get_assignment(
     assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
-    return assignment
+    return 
 
 
 # ── Update Assignment ─────────────────────────────────────────────────────────
@@ -508,7 +508,6 @@ def my_assignments(
     result = []
 
     for en in enrollments:
-
         classroom = db.query(Classroom).filter(
             Classroom.id == en.classroom_id
         ).first()

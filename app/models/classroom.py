@@ -22,3 +22,5 @@ class Classroom(Base):
     end_time = Column(String)
 
     course = relationship("Course")
+
+    enrollments = relationship("Enrollment", back_populates="classroom")
