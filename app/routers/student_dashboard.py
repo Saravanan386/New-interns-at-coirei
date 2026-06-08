@@ -445,14 +445,13 @@ from sqlalchemy import func, case, and_
 from datetime import datetime
 
 from app.database import get_db
-from app.auth import get_current_user, require_student
+from app.utils.security import get_current_user, require_student
 from app.models.user import User
-from app.models.student_information import StudentInformation
 from app.models.enrollment import Enrollment
 from app.models.classroom import Classroom
 from app.models.course import Course
 from app.models.module import Module, Chapter
-from app.models.class_session import ClassSession
+from app.models.session import ClassSession
 from app.models.attendance import SessionParticipant
 from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.test import Test, TestSubmission
