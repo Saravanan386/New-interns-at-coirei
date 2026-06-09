@@ -1326,3 +1326,73 @@ def student_available_tests(
             })
 
     return results
+
+
+@router.get("/instructor/all-tests-metadata")
+def get_instructor_tests_metadata(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Fetch all tests created by the instructor with comprehensive relational information:
+    - Test ID & Title
+    - Course ID & Name
+    - Module ID & Name
+    - Classroom ID & Batch Name
+    - Creator (User ID & Name)
+    """
+    # 1. Verify that the user is an instructor
+    check_instructor(current_user)
+
+    # 2. Query tests created by this instructor
+    tests = (
+        db.query(Test)
+        .filter(Test.created_by == current_user["user_id"])
+        .all()
+    )
+
+    result = []
+
+    for test in tests:
+        # Find the specific classroom tied to this test via course and batch mapping
+        classroom = (
+            db.query(Classroom)
+            .filter(
+                Classroom.course_id == test.course_id,
+                Classroom.batch_name == test.batch_name
+            )
+            .first()
+        )
+
+        # Safely extract instructor details if needed
+        instructor_user = db.query(User).filter(User.id == test.created_by).first()
+
+        result.append({
+            # Test Core Info
+            "test_id": test.id,
+            "test_title": test.title,
+            "test_description": test.description,
+            
+            # Course Mapping
+            "course_id": test.course_id,
+            "course_name": test.course.name if test.course else None,
+            
+            # Module Mapping
+            "module_id": test.module_id,
+            "module_name": test.module.title if test.module else None,
+            
+            # Classroom / Batch Mapping
+            "classroom_id": classroom.id if classroom else None,
+            "batch_name": test.batch_name,
+            
+            # User / Instructor Mapping
+            "user_id": test.created_by,
+            "instructor_name": instructor_user.name if instructor_user else None,
+            
+            # Metadata Timestamps
+            "start_time": test.start_time,
+            "end_time": test.end_time,
+            "created_at": test.created_at
+        })
+
+    return result
