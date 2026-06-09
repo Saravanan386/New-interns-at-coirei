@@ -55,6 +55,11 @@ app = FastAPI(
     description="LMS API with Jitsi video conferencing",
 )
 
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 # Merged allow_origins to include all URLs from both versions
 app.add_middleware(
     CORSMiddleware,

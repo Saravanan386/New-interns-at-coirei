@@ -1,11 +1,9 @@
 from fastapi import APIRouter, Depends
+
+from app.config import JITSI_BASE_URL
 from app.utils.security import get_current_user, require_roles
-import os
 
 router = APIRouter(prefix="/classes", tags=["Classes"])
-
-JITSI_BASE_URL = os.getenv("JITSI_BASE_URL", "https://localhost:8443")
-
 
 @router.get("/upcoming")
 def upcoming_classes(user=Depends(get_current_user)):

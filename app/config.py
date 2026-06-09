@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,5 +25,19 @@ JITSI_DOMAIN = os.getenv("JITSI_DOMAIN", "https://meet.jit.si").rstrip("/")
 JITSI_BASE_URL = os.getenv("JITSI_BASE_URL", JITSI_DOMAIN)
 JITSI_APP_ID = os.getenv("JITSI_APP_ID")
 JITSI_APP_SECRET = os.getenv("JITSI_APP_SECRET")
+JITSI_JWT_ISSUER = os.getenv("JITSI_JWT_ISSUER", JITSI_APP_ID)
 JITSI_JWT_AUDIENCE = os.getenv("JITSI_JWT_AUDIENCE", "jitsi")
-JITSI_JWT_SUBJECT = os.getenv("JITSI_JWT_SUBJECT", JITSI_DOMAIN)
+
+
+def _default_jitsi_subject() -> str:
+    parsed = urlparse(JITSI_BASE_URL)
+    if parsed.hostname:
+        return parsed.hostname
+    parsed = urlparse(JITSI_DOMAIN)
+    if parsed.hostname:
+        return parsed.hostname
+    return JITSI_DOMAIN
+
+
+JITSI_JWT_SUBJECT = os.getenv("JITSI_JWT_SUBJECT", _default_jitsi_subject())
+JITSI_TOKEN_TTL_MINUTES = int(os.getenv("JITSI_TOKEN_TTL_MINUTES", "120"))

@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lms}
+      POSTGRES_USER: ${POSTGRES_USER:-lms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lms}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lms} -d ${POSTGRES_DB:-lms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lms}:${POSTGRES_PASSWORD:-lms}@db:5432/${POSTGRES_DB:-lms}
+      JWT_SECRET: ${JWT_SECRET:-change-me-now}
+      JITSI_BASE_URL: ${JITSI_BASE_URL:-http://localhost:8080}
+      JITSI_DOMAIN: ${JITSI_DOMAIN:-http://localhost:8080}
+      JITSI_APP_ID: ${JITSI_APP_ID:-lms-app}
+      JITSI_APP_SECRET: ${JITSI_APP_SECRET:-change-me-now}
+      JITSI_JWT_ISSUER: ${JITSI_JWT_ISSUER:-lms-app}
+      JITSI_JWT_AUDIENCE: ${JITSI_JWT_AUDIENCE:-jitsi}
+      JITSI_JWT_SUBJECT: ${JITSI_JWT_SUBJECT:-localhost}
+      JITSI_TOKEN_TTL_MINUTES: ${JITSI_TOKEN_TTL_MINUTES:-120}
+      PORT: ${PORT:-8000}
+    ports:
+      - "${PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:

@@ -1,84 +1,172 @@
-import sys
 import os
+import sys
 
 sys.path.append(os.getcwd())
 
-from app.database import SessionLocal
-from app.models.user import User
-from app.models.course import Course
-from app.models.module import Module, Chapter
-from app.models.enrollment import Enrollment
-from app.models.classroom import Classroom
+from app.database import SessionLocal  # noqa: E402
+from app.models.classroom import Classroom  # noqa: E402
+from app.models.course import Course  # noqa: E402
+from app.models.enrollment import Enrollment  # noqa: E402
+from app.models.instructor_enrollment import InstructorEnrollment  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.utils.security import hash_password  # noqa: E402
+
+DEMO_INSTRUCTOR_EMAIL = "instructor@demo.com"
+DEMO_INSTRUCTOR_PASSWORD = "Demo@12345"
+DEMO_STUDENT_EMAIL = "student@demo.com"
+DEMO_STUDENT_PASSWORD = "Demo@12345"
+
+DEMO_COURSE_CODE = "DEMO101"
+DEMO_COURSE_NAME = "AI / ML Frontier Demo"
+DEMO_BATCH_NAME = "Batch-Demo"
+DEMO_ROOM_NAME = "Demo_Conference_Room"
+
+
+def _get_or_create_user(db, *, name: str, email: str, password: str, role: str):
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        return user
+
+    user = User(
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        role=role,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _get_or_create_course(db):
+    course = db.query(Course).filter(Course.course_code == DEMO_COURSE_CODE).first()
+    if course:
+        return course
+
+    course = Course(
+        course_code=DEMO_COURSE_CODE,
+        name=DEMO_COURSE_NAME,
+        description="Demo course for the LMS + Jitsi self-host walkthrough.",
+        duration_months=3,
+        total_lessons=24,
+    )
+    db.add(course)
+    db.commit()
+    db.refresh(course)
+    return course
+
+
+def _get_or_create_classroom(db, course_id: int, instructor: User):
+    classroom = (
+        db.query(Classroom)
+        .filter(
+            Classroom.course_id == course_id,
+            Classroom.batch_name == DEMO_BATCH_NAME,
+        )
+        .first()
+    )
+    if classroom:
+        return classroom
+
+    classroom = Classroom(
+        course_id=course_id,
+        batch_name=DEMO_BATCH_NAME,
+        room_name=DEMO_ROOM_NAME,
+        instructor_id=instructor.id,
+        instructor_name=instructor.name,
+        batch_code="DEMO-BATCH",
+        schedule_type="weekday",
+        start_month="2026-06",
+        class_days="Mon,Wed,Fri",
+        start_time="10:00",
+        end_time="11:30",
+    )
+    db.add(classroom)
+    db.commit()
+    db.refresh(classroom)
+    return classroom
+
+
+def _ensure_instructor_assignment(db, classroom: Classroom, instructor: User):
+    existing = (
+        db.query(InstructorEnrollment)
+        .filter(
+            InstructorEnrollment.user_id == instructor.id,
+            InstructorEnrollment.classroom_id == classroom.id,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    assignment = InstructorEnrollment(
+        user_id=instructor.id,
+        classroom_id=classroom.id,
+    )
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+    return assignment
+
+
+def _ensure_student_enrollment(db, classroom: Classroom, student: User):
+    existing = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.user_id == student.id,
+            Enrollment.classroom_id == classroom.id,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    enrollment = Enrollment(
+        user_id=student.id,
+        classroom_id=classroom.id,
+        progress_percent=0,
+        status="ongoing",
+    )
+    db.add(enrollment)
+    db.commit()
+    db.refresh(enrollment)
+    return enrollment
+
 
 def seed():
     db = SessionLocal()
     try:
-        print("Finding existing users...")
-        instructor = db.query(User).filter(User.email == "instructor@coirei.com").first()
-        student = db.query(User).filter(User.email == "kuberan@coirei.com").first()
-        
-        if not instructor or not student:
-            print("Error: Essential users not found. Run selective_cleanup.py first if you haven't.")
-            return
+        instructor = _get_or_create_user(
+            db,
+            name="Demo Instructor",
+            email=DEMO_INSTRUCTOR_EMAIL,
+            password=DEMO_INSTRUCTOR_PASSWORD,
+            role="instructor",
+        )
+        student = _get_or_create_user(
+            db,
+            name="Demo Student",
+            email=DEMO_STUDENT_EMAIL,
+            password=DEMO_STUDENT_PASSWORD,
+            role="student",
+        )
+        course = _get_or_create_course(db)
+        classroom = _get_or_create_classroom(db, course.id, instructor)
+        _ensure_instructor_assignment(db, classroom, instructor)
+        _ensure_student_enrollment(db, classroom, student)
 
-        print("Adding courses...")
-        ai_course = Course(
-            name="AI/ML frontier Engineer", 
-            duration_months=3, 
-            total_lessons=40
-        )
-        
-        db.add(ai_course)
-        db.commit()
-        db.refresh(ai_course)
-        
-        print(f"Added course: {ai_course.name} (ID: {ai_course.id})")
-
-        print("Adding modules and chapters for AI/ML course...")
-        mod1 = Module(title="Introduction to AI & Machine Learning", order=1, course_id=ai_course.id, batch_name="Batch-A")
-        db.add(mod1)
-        db.commit()
-        db.refresh(mod1)
-        
-        ch1 = Chapter(title="Foundations of AI", order=1, module_id=mod1.id)
-        ch2 = Chapter(title="Python for ML", order=2, module_id=mod1.id)
-        db.add_all([ch1, ch2])
-        
-        mod2 = Module(title="Frontier Engineering Techniques", order=2, course_id=ai_course.id, batch_name="Batch-A")
-        db.add(mod2)
-        db.commit()
-        db.refresh(mod2)
-        
-        ch3 = Chapter(title="Advanced Prompt Engineering", order=1, module_id=mod2.id)
-        db.add(ch3)
-        
-        print("Enrolling student...")
-        enrollment = Enrollment(
-            user_id=student.id,
-            course_id=ai_course.id,
-            batch_name="Batch-A",
-            progress_percent=0,
-            status="ongoing"
-        )
-        db.add(enrollment)
-        
-        print("Adding classroom...")
-        classroom = Classroom(
-            course_id=ai_course.id,
-            course_name=ai_course.name,
-            batch_name="Batch-A",
-            room_name="AI_ML_Frontier_Room"
-        )
-        db.add(classroom)
-        
-        db.commit()
-        print("Database seeded successfully with essential data including classroom!")
-        
-    except Exception as e:
+        print("Demo data seeded successfully.")
+        print(f"Instructor login: {DEMO_INSTRUCTOR_EMAIL} / {DEMO_INSTRUCTOR_PASSWORD}")
+        print(f"Student login:    {DEMO_STUDENT_EMAIL} / {DEMO_STUDENT_PASSWORD}")
+        print(f"Classroom:        {classroom.batch_name} ({classroom.room_name})")
+    except Exception as exc:
         db.rollback()
-        print(f"Error during seeding: {e}")
+        print(f"Error during seeding: {exc}")
+        raise
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     seed()

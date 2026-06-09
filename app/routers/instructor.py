@@ -51,6 +51,34 @@ def _course_name_map(db: Session) -> dict[int, str]:
     return {course.id: course.name for course in db.query(Course).all()}
 
 
+def _classroom_ids_for_pairs(
+    db: Session,
+    pairs: list[tuple[int, str]],
+    course_id: Optional[int] = None,
+    batch_name: Optional[str] = None,
+) -> list[int]:
+    query = db.query(Classroom.id, Classroom.course_id, Classroom.batch_name)
+
+    if pairs:
+        pair_condition = None
+        for pair_course_id, pair_batch_name in pairs:
+            current = (
+                (Classroom.course_id == pair_course_id)
+                & (Classroom.batch_name == pair_batch_name)
+            )
+            pair_condition = current if pair_condition is None else pair_condition | current
+        query = query.filter(pair_condition)
+    else:
+        return []
+
+    if course_id is not None:
+        query = query.filter(Classroom.course_id == course_id)
+    if batch_name:
+        query = query.filter(Classroom.batch_name == batch_name)
+
+    return [row.id for row in query.distinct().all()]
+
+
 def _student_payload(student: Optional[User]) -> dict:
     if not student:
         return {
@@ -91,7 +119,10 @@ def instructor_dashboard(
             .count()
         )
 
-    sessions_q = _apply_pair_filter(db.query(ClassSession), ClassSession, pairs)
+    classroom_ids = _classroom_ids_for_pairs(db, pairs)
+    sessions_q = db.query(ClassSession).filter(
+        ClassSession.classroom_id.in_(classroom_ids)
+    )
     tests_q = _apply_pair_filter(db.query(Test), Test, pairs)
     assignments_q = db.query(Assignment).filter(Assignment.created_by == current_user["user_id"])
     if current_user.get("role") == "admin":
@@ -126,12 +157,8 @@ def instructor_sessions(
 ):
     require_instructor(current_user)
     pairs = _assigned_pairs(db, current_user)
-    query = _apply_pair_filter(db.query(ClassSession), ClassSession, pairs)
-
-    if course_id is not None:
-        query = query.filter(ClassSession.course_id == course_id)
-    if batch_name:
-        query = query.filter(ClassSession.batch_name == batch_name)
+    classroom_ids = _classroom_ids_for_pairs(db, pairs, course_id=course_id, batch_name=batch_name)
+    query = db.query(ClassSession).filter(ClassSession.classroom_id.in_(classroom_ids))
     if status:
         query = query.filter(ClassSession.status == status)
 
@@ -146,17 +173,17 @@ def instructor_sessions(
             .group_by(SessionParticipant.status)
             .all()
         )
+        classroom = db.query(Classroom).filter(Classroom.id == session.classroom_id).first()
         total_enrolled = db.query(Enrollment).filter(
-            Enrollment.course_id == session.course_id,
-            Enrollment.batch_name == session.batch_name,
+            Enrollment.classroom_id == session.classroom_id,
             Enrollment.status == "ongoing",
         ).count()
 
         rows.append({
             "session_id": session.id,
-            "course_id": session.course_id,
-            "course_name": course_names.get(session.course_id, "Unknown"),
-            "batch_name": session.batch_name,
+            "course_id": classroom.course_id if classroom else None,
+            "course_name": course_names.get(classroom.course_id, "Unknown") if classroom else None,
+            "batch_name": classroom.batch_name if classroom else None,
             "status": session.status,
             "start_time": session.start_time,
             "end_time": session.end_time,

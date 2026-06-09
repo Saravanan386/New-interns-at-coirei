@@ -26,6 +26,7 @@ from app.models.session import ClassSession
 from app.models.attendance import SessionParticipant
 from app.models.test import Test, TestSubmission
 from app.models.user import User
+from app.services.classroom_stats import require_classroom_access
 
 router = APIRouter(prefix="/batches", tags=["Batch Analytics"])
 
@@ -41,8 +42,7 @@ def check_instructor(current_user: dict):
 # ── Helper: attendance rate for a batch over the last N days ─────────────────
 
 def _attendance_rate(
-    course_id: int,
-    batch_name: str,
+    classroom_id: int,
     student_ids: list[int],
     db: Session,
     days: int = LAST_N_DAYS
@@ -60,8 +60,7 @@ def _attendance_rate(
     since = datetime.utcnow() - timedelta(days=days)
 
     sessions = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name,
+        ClassSession.classroom_id == classroom_id,
         ClassSession.start_time >= since,
         ClassSession.status == "ended"
     ).all()
@@ -69,8 +68,7 @@ def _attendance_rate(
     if not sessions:
         # Fall back to all ended sessions (no 30-day filter)
         sessions = db.query(ClassSession).filter(
-            ClassSession.course_id == course_id,
-            ClassSession.batch_name == batch_name,
+            ClassSession.classroom_id == classroom_id,
             ClassSession.status == "ended"
         ).all()
 
@@ -96,7 +94,7 @@ def _attendance_rate(
 
 # ── Helper: class completion stats ───────────────────────────────────────────
 
-def _class_stats(course_id: int, batch_name: str, db: Session) -> dict:
+def _class_stats(classroom_id: int, db: Session) -> dict:
     """
     Returns:
       completed  – number of `ended` ClassSession rows
@@ -107,13 +105,11 @@ def _class_stats(course_id: int, batch_name: str, db: Session) -> dict:
     (each session row = one scheduled class whether ended or live/upcoming).
     """
     total = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name
+        ClassSession.classroom_id == classroom_id
     ).count()
 
     completed = db.query(ClassSession).filter(
-        ClassSession.course_id == course_id,
-        ClassSession.batch_name == batch_name,
+        ClassSession.classroom_id == classroom_id,
         ClassSession.status == "ended"
     ).count()
 
@@ -137,7 +133,7 @@ def _average_score(course_id: int, batch_name: str, db: Session) -> Optional[flo
     if not latest_test:
         return None
 
-    avg = db.query(func.avg(TestSubmission.score)).filter(
+    avg = db.query(func.avg(TestSubmission.score_percentage)).filter(
         TestSubmission.test_id == latest_test.id,
         TestSubmission.status == "submitted"
     ).scalar()
@@ -164,7 +160,8 @@ def batch_overview(
     - total_students (active enrolled)
     - average_score (last assessment, /100)
     """
-    check_instructor(current_user)
+    if current_user.get("role") not in ("instructor", "admin"):
+        raise HTTPException(status_code=403, detail="Instructor access required.")
 
     # 1. Validate course
     course = db.query(Course).filter(Course.id == course_id).first()
@@ -182,6 +179,8 @@ def batch_overview(
             detail=f"Batch '{batch_name}' not found for this course"
         )
 
+    require_classroom_access(db, current_user, classroom.id)
+
     # 3. Enrolled active students
     enrollments = db.query(Enrollment).filter(
         Enrollment.course_id == course_id,
@@ -192,10 +191,10 @@ def batch_overview(
     total_students = len(student_ids)
 
     # 4. Attendance rate
-    attendance_rate = _attendance_rate(course_id, batch_name, student_ids, db)
+    attendance_rate = _attendance_rate(classroom.id, student_ids, db)
 
     # 5. Class stats
-    class_stats = _class_stats(course_id, batch_name, db)
+    class_stats = _class_stats(classroom.id, db)
     classes_completed = class_stats["completed"]
     classes_total = class_stats["total"]
     completion_percent = (
@@ -206,6 +205,7 @@ def batch_overview(
     average_score = _average_score(course_id, batch_name, db)
 
     return {
+        "classroom_id": classroom.id,
         "batch_name": batch_name,
         "course_id": course_id,
         "course_title": course.name,

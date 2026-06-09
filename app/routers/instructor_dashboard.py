@@ -19,6 +19,10 @@ from app.models.session import ClassSession
 from app.models.attendance import SessionParticipant
 from app.models.announcements import Announcement
 from app.models.registration_profile import InstructorInformation, StudentInformation
+from app.services.classroom_stats import (
+    classroom_dashboard_metrics,
+    require_classroom_access,
+)
 
 router = APIRouter(
     prefix="/instructor",
@@ -277,49 +281,59 @@ def instructor_dashboard(
     # ------------------------------------------------------------------------
 
     recent_tests = []
+    seen_test_ids = set()
 
     try:
-
-        tests = (
-            db.query(Test)
-            .filter(
-                Test.classroom_id.in_(classroom_ids)
-            )
-            .order_by(
-                Test.id.desc()
-            )
-            .limit(5)
+        classroom_rows = (
+            db.query(Classroom)
+            .filter(Classroom.id.in_(classroom_ids))
             .all()
         )
 
-        for test in tests:
-
-            submissions = (
-                db.query(TestSubmission)
+        for classroom in classroom_rows:
+            tests = (
+                db.query(Test)
                 .filter(
-                    TestSubmission.test_id == test.id
+                    Test.course_id == classroom.course_id,
+                    Test.batch_name == classroom.batch_name,
                 )
-                .count()
+                .order_by(Test.id.desc())
+                .limit(5)
+                .all()
             )
 
-            passed = (
-                db.query(TestSubmission)
-                .filter(
-                    TestSubmission.test_id == test.id,
-                    TestSubmission.is_passed == True
+            for test in tests:
+                if test.id in seen_test_ids:
+                    continue
+
+                seen_test_ids.add(test.id)
+                submissions = (
+                    db.query(TestSubmission)
+                    .filter(TestSubmission.test_id == test.id)
+                    .count()
                 )
-                .count()
-            )
+                passed = (
+                    db.query(TestSubmission)
+                    .filter(
+                        TestSubmission.test_id == test.id,
+                        TestSubmission.is_passed == True,
+                    )
+                    .count()
+                )
 
-            recent_tests.append({
-                "test_id": test.id,
-                "title": test.title,
-                "submissions": submissions,
-                "passed": passed,
-                "failed": submissions - passed
-            })
+                recent_tests.append({
+                    "test_id": test.id,
+                    "title": test.title,
+                    "course_id": test.course_id,
+                    "batch_name": test.batch_name,
+                    "submissions": submissions,
+                    "passed": passed,
+                    "failed": submissions - passed,
+                })
 
-    except:
+        recent_tests = sorted(recent_tests, key=lambda item: item["test_id"], reverse=True)[:5]
+
+    except Exception:
         pass
 
     return {
@@ -329,6 +343,16 @@ def instructor_dashboard(
         "live_classes": live_classes,
         "recent_tests": recent_tests
     }
+
+
+@router.get("/classrooms/{classroom_id}/stats")
+def classroom_stats(
+    classroom_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    classroom = require_classroom_access(db, current_user, classroom_id)
+    return classroom_dashboard_metrics(db, classroom)
 
 @router.get("/dashboard/summary")
 def get_dashboard_summary(

@@ -1,7 +1,6 @@
 # app/routers/sessions.py
 
 import asyncio
-import urllib.parse
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -11,12 +10,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
+from app.config import JITSI_BASE_URL
 from app.models.attendance import SessionParticipant
 from app.models.classroom import Classroom
 from app.models.enrollment import Enrollment
 from app.models.instructor_enrollment import InstructorEnrollment
 from app.models.session import ClassSession
 from app.models.user import User
+from app.services.jitsi_auth import build_meeting_url
+from app.services.jitsi_auth import generate_room_name
 from app.services.jitsi_service import create_room
 from app.utils.security import get_current_user
 
@@ -26,9 +28,56 @@ router = APIRouter(
     prefix="/sessions",
     tags=["Sessions"]
 )
-from app.services.jitsi_auth import (
-    generate_room_name
-)
+
+
+def _ensure_session_access(
+    db: Session,
+    session: ClassSession,
+    current_user: dict,
+) -> None:
+    role = current_user.get("role")
+
+    if role == "student":
+
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.user_id == current_user["user_id"],
+            Enrollment.classroom_id == session.classroom_id
+        ).first()
+
+        if not enrollment:
+
+            raise HTTPException(
+                status_code=403,
+                detail="Student not enrolled"
+            )
+
+    elif role == "instructor":
+
+        assignment = db.query(InstructorEnrollment).filter(
+            InstructorEnrollment.user_id == current_user["user_id"],
+            InstructorEnrollment.classroom_id == session.classroom_id
+        ).first()
+
+        if not assignment:
+
+            raise HTTPException(
+                status_code=403,
+                detail="Instructor not assigned"
+            )
+
+    elif role != "admin":
+
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this session"
+        )
+
+
+def _display_name_for_user(db: Session, user_id: int) -> str:
+    user_record = db.query(User).filter(User.id == user_id).first()
+    if user_record and user_record.name:
+        return user_record.name
+    return f"User_{user_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -155,13 +204,20 @@ async def start_session(
     )
 
     room = create_room(room_name)
+    instructor_name = _display_name_for_user(db, current_user["user_id"])
+    host_url = build_meeting_url(
+        room_name=room_name,
+        user_id=current_user["user_id"],
+        user_name=instructor_name,
+        role="instructor",
+    )
 
     # CREATE SESSION
     session = ClassSession(
         classroom_id=classroom.id,
         livekit_room_name=room["room_id"],
-        host_url=room["host_url"],
-        join_url=room["guest_url"],
+        host_url=host_url or room["host_url"],
+        join_url=None,
         status="live",
         start_time=datetime.now(IST).replace(tzinfo=None)
     )
@@ -177,8 +233,8 @@ async def start_session(
         "session_id": session.id,
         "classroom_id": classroom.id,
         "room_id": room["room_id"],
-        "meet_link": room["host_url"],
-        "guest_link": room["guest_url"],
+        "meet_link": host_url or room["host_url"],
+        "guest_link": None,
         "status": session.status
     }
 
@@ -208,30 +264,16 @@ def get_active_session(
             "join_enabled": False
         }
 
-    is_instructor = (
-        current_user.get("role") == "instructor"
+    _ensure_session_access(db, session, current_user)
+
+    display_name = _display_name_for_user(db, current_user["user_id"])
+    role = current_user.get("role", "student")
+    meet_link = build_meeting_url(
+        room_name=session.livekit_room_name,
+        user_id=current_user["user_id"],
+        user_name=display_name,
+        role=role,
     )
-
-    meet_link = (
-        session.host_url
-        if is_instructor
-        else session.join_url
-    )
-
-    # ADD USER NAME TO URL
-    user_record = db.query(User).filter(
-        User.id == current_user["user_id"]
-    ).first()
-
-    if user_record and user_record.name:
-
-        encoded_name = urllib.parse.quote(
-            user_record.name
-        )
-
-        meet_link = (
-            f"{meet_link}&userInfo.displayName={encoded_name}"
-        )
 
     participant = db.query(SessionParticipant).filter(
         SessionParticipant.session_id == session.id,
@@ -247,7 +289,6 @@ def get_active_session(
         "is_joined": participant is not None,
         "room_id": session.livekit_room_name,
         "meet_link": meet_link,
-        "is_joined": participant is not None,
         "participant_status": (
             participant.status
             if participant
@@ -312,7 +353,13 @@ async def join_session(
     if existing:
 
         return {
-            "status": "already_joined"
+            "status": "already_joined",
+            "meet_link": build_meeting_url(
+                room_name=session.livekit_room_name,
+                user_id=current_user["user_id"],
+                user_name=_display_name_for_user(db, current_user["user_id"]),
+                role="student",
+            ),
         }
 
     participant = SessionParticipant(
@@ -328,12 +375,21 @@ async def join_session(
 
     db.refresh(participant)
 
+    display_name = _display_name_for_user(db, current_user["user_id"])
+    meeting_url = build_meeting_url(
+        room_name=session.livekit_room_name,
+        user_id=current_user["user_id"],
+        user_name=display_name,
+        role="student",
+    )
+
     asyncio.create_task(
         auto_mark_attendance(participant.id)
     )
 
     return {
         "status": "joined",
+        "meet_link": meeting_url,
         "message": f"Attendance will be calculated after {ATTENDANCE_THRESHOLD_MINUTES} minutes"
     }
 
@@ -626,46 +682,7 @@ def get_session_access(
             status_code=404,
             detail="Session not found"
         )
-    if current_user["role"] == "student":
-
-        enrollment = (
-            db.query(Enrollment)
-            .filter(
-                Enrollment.user_id
-                == current_user["user_id"],
-
-                Enrollment.classroom_id
-                == session.classroom_id
-            )
-            .first()
-        )
-
-        if not enrollment:
-
-            raise HTTPException(
-                status_code=403,
-                detail="Student not enrolled"
-            )
-    if current_user["role"] == "instructor":
-
-        assignment = (
-            db.query(InstructorEnrollment)
-            .filter(
-                InstructorEnrollment.user_id
-                == current_user["user_id"],
-
-                InstructorEnrollment.classroom_id
-                == session.classroom_id
-            )
-            .first()
-        )
-
-        if not assignment:
-
-            raise HTTPException(
-                status_code=403,
-                detail="Instructor not assigned"
-            )
+    _ensure_session_access(db, session, current_user)
     user = (
         db.query(User)
         .filter(
@@ -674,15 +691,26 @@ def get_session_access(
         .first()
     )
 
+    display_name = user.name if user and user.name else f"User_{current_user['user_id']}"
+    role = current_user["role"]
+    meeting_url = build_meeting_url(
+        room_name=session.livekit_room_name,
+        user_id=current_user["user_id"],
+        user_name=display_name,
+        role=role,
+    )
+
     return {
 
         "session_id": session.id,
 
         "room_name": session.livekit_room_name,
 
-        "display_name": user.name,
+        "display_name": display_name,
 
-        "role": current_user["role"],
+        "role": role,
 
-        "domain": "meet.jit.si"
+        "domain": JITSI_BASE_URL,
+
+        "meeting_url": meeting_url,
     }

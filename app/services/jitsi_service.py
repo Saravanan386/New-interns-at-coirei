@@ -1,34 +1,27 @@
-import secrets
-import urllib.parse
-
-from app.config import JITSI_DOMAIN
-
-
-def generate_room_name(classroom_id: int) -> str:
-
-    random_part = secrets.token_hex(8)
-
-    return f"lms-classroom-{classroom_id}-{random_part}"
+from app.services.jitsi_auth import (
+    build_meeting_url,
+    generate_room_name,
+)
 
 
 def create_room(room_name: str):
-
-    safe_room = urllib.parse.quote(room_name)
-
-    base_url = f"{JITSI_DOMAIN}/{safe_room}"
-
-    config_params = [
-        "config.prejoinPageEnabled=false",
-        "config.startWithAudioMuted=false",
-        "config.startWithVideoMuted=false",
-        "config.disableModeratorIndicator=false",
-        "config.enableWelcomePage=false",
-    ]
-
-    meeting_url = f"{base_url}#{'&'.join(config_params)}"
+    # Generic instructor/student links for the session start response.
+    host_url = build_meeting_url(
+        room_name=room_name,
+        user_id=0,
+        user_name="Instructor",
+        role="instructor",
+    )
+    guest_url = build_meeting_url(
+        room_name=room_name,
+        user_id=0,
+        user_name="Student",
+        role="student",
+    )
 
     return {
         "room_id": room_name,
-        "host_url": meeting_url,
-        "guest_url": meeting_url,
+        "host_url": host_url,
+        "guest_url": guest_url,
     }
+
