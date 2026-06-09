@@ -1,6 +1,8 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional, Dict, Any
+
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -418,3 +420,104 @@ def module_full_overview(
         "assignments": assignments_data,
         "tests":       tests_data,
     }
+
+
+
+# Ensure your models are imported completely
+
+
+# Reusing the existing prefix router context
+# router = APIRouter(prefix="/modules", tags=["Modules"])
+
+@router.get("/{module_id}/chapters/{chapter_id}/details")
+def get_chapter_details_by_role(
+    module_id: int,
+    chapter_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Fetch unified chapter details tailored by user role:
+    - Verifies module and chapter alignment context.
+    - Instructors receive structural data and backend storage paths.
+    - Students receive sanitized access strings and consumer-safe download payloads.
+    """
+    # 1. Validate parent Module context integrity
+    module = db.query(Module).filter(Module.id == module_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module context not found")
+
+    # 2. Extract precise Chapter details bounded by the validated Module ID
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, 
+        Chapter.module_id == module_id
+    ).first()
+    
+    if not chapter:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Chapter with ID {chapter_id} not found inside Module {module_id}"
+        )
+
+    # 3. Pull associated assets/resources mapped to this specific Chapter
+    resources_db = db.query(ChapterResource).filter(
+        ChapterResource.chapter_id == chapter.id
+    ).all()
+
+    # 4. Extract User contextual role
+    user_role = current_user.get("role")
+
+    # ── INSTRUCTOR VIEW DATA STREAM ──────────────────────────────────────────
+    if user_role == "instructor":
+        return {
+            "view_mode": "instructor",
+            "module_context": {
+                "module_id": module.id,
+                "module_title": module.title,
+                "batch_name": module.batch_name
+            },
+            "chapter_details": {
+                "chapter_id": chapter.id,
+                "title": chapter.title,
+                "order": chapter.order,
+                "class_content": chapter.class_content,
+                "key_topics": chapter.key_topics,
+            },
+            "resources": [
+                {
+                    "resource_id": r.id,
+                    "file_name": r.file_name,
+                    "file_path": r.file_path,  # Raw tracking path exposed securely to management
+                    "file_size": r.file_size,
+                    "uploaded_at": r.uploaded_at.strftime("%Y-%m-%d %I:%M %p") if r.uploaded_at else None
+                }
+                for r in resources_db
+            ]
+        }
+
+    # ── STUDENT VIEW DATA STREAM ─────────────────────────────────────────────
+    elif user_role == "student":
+        # Enforce structural boundaries: Match student batch visibility to module boundaries
+        if module.batch_name and current_user.get("batch_name") != module.batch_name:
+             raise HTTPException(status_code=403, detail="Access denied. Batch mismatch.")
+
+        return {
+            "view_mode": "student",
+            "chapter_title": chapter.title,
+            "class_content": chapter.class_content,
+            "key_topics": chapter.key_topics,
+            "downloadable_materials": [
+                {
+                    "resource_id": r.id,
+                    "display_name": r.file_name,
+                    "size": r.file_size,
+                    # Hides internal system paths, providing a clean delivery point
+                    "download_url": f"/api/v1/resources/download/{r.id}" 
+                }
+                for r in resources_db
+            ]
+        }
+
+    # ── FALLBACK BOUNDARY PROTECTION ────────────────────────────────────────
+    else:
+        raise HTTPException(status_code=403, detail="Unrecognized functional role profile.")

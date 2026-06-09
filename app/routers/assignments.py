@@ -548,7 +548,11 @@ def my_assignments(
                 "batch_name": assignment.batch_name,
                 "due_date": assignment.due_date,
                 "created_at": assignment.created_at,
-                "status": submission.status if submission else "not_submitted"
+                "status": submission.status if submission else "not_submitted",
+                "submission_date": submission.submitted_at if submission else None,
+                "submission_id": submission.id if submission else None,
+                "grade": submission.grade if submission else None,
+                "feedback": submission.feedback if submission else None
             })
 
     return result

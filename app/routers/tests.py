@@ -9,6 +9,8 @@ from app.database import get_db
 from app.utils.security import get_current_user
 from app.models.test import Test, Question, Option, TestSubmission, StudentAnswer
 from app.models.user import User
+from app.models.course import Course
+
 from app.models.enrollment import Enrollment
 from app.models.classroom import Classroom
 from app.schemas import (
@@ -19,7 +21,38 @@ from app.schemas import (
 )
 from rapidfuzz import fuzz
 from app.models.module import Module
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+from typing import Optional, List
+ 
+from app.models.module      import Module, Chapter
+from app.models.chapter_resources import ChapterResource
+from app.models.assignment  import Assignment, AssignmentResource, AssignmentSubmission
+from app.models.test        import (
+    Test, Question, Option,
+    TestSubmission, StudentAnswer
+)
 
+from collections import Counter
+import statistics
+ 
+def check_student(current_user: dict):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access only")
+ 
+ 
+def check_instructor(current_user: dict):
+    if current_user.get("role") != "instructor":
+        raise HTTPException(status_code=403, detail="Instructor access only")
+ 
+ 
+def _fmt_dt(dt: Optional[datetime]) -> Optional[str]:
+    if not dt:
+        return None
+    return dt.strftime("%Y-%m-%d %I:%M %p")
+ 
+ 
 router = APIRouter(prefix="/tests", tags=["Tests"])
 
 PASS_THRESHOLD = 60.0  # percentage needed to pass
@@ -1275,55 +1308,19 @@ def get_instructor_tests_metadata(
         })
 
     return result
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from datetime import datetime, timezone
-from typing import Optional, List
- 
-from app.database import get_db
-from app.utils.security import get_current_user
- 
-from app.models.user        import User
-from app.models.enrollment  import Enrollment
-from app.models.classroom   import Classroom
-from app.models.course      import Course
-from app.models.module      import Module, Chapter
-from app.models.chapter_resources import ChapterResource
-from app.models.assignment  import Assignment, AssignmentResource, AssignmentSubmission
-from app.models.test        import (
-    Test, Question, Option,
-    TestSubmission, StudentAnswer
-)
- 
+
  
 # ── shared helpers ────────────────────────────────────────────────────────────
- 
-def check_student(current_user: dict):
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Student access only")
- 
- 
-def check_instructor(current_user: dict):
-    if current_user.get("role") != "instructor":
-        raise HTTPException(status_code=403, detail="Instructor access only")
- 
- 
-def _fmt_dt(dt: Optional[datetime]) -> Optional[str]:
-    if not dt:
-        return None
-    return dt.strftime("%Y-%m-%d %I:%M %p")
- 
+
  
 # ─────────────────────────────────────────────────────────────────────────────
 #  ROUTER 1 – Tests  (prefix="/tests")
 # ─────────────────────────────────────────────────────────────────────────────
  
-tests_router = APIRouter(prefix="/tests", tags=["Tests"])
- 
- 
+
 # ── 1. Student: full result with answers ─────────────────────────────────────
  
-@tests_router.get("/student/{test_id}/result")
+@router.get("/student/{test_id}/result")
 def student_test_result(
     test_id: int,
     db: Session = Depends(get_db),
@@ -1455,7 +1452,7 @@ def student_test_result(
  
 # ── 2. Student: available tests (with obtainable_marks) ──────────────────────
  
-@tests_router.get("/student/available")
+@router.get("/student/available")
 def student_available_tests(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -1549,7 +1546,7 @@ def student_available_tests(
  
 
 
-@tests_router.get("/instructor/{test_id}/analytics")
+@router.get("/instructor/{test_id}/analytics")
 def test_analytics(
     test_id: int,
     db: Session = Depends(get_db),
@@ -1661,3 +1658,954 @@ def test_analytics(
         "question_analysis": question_analysis,
     }
   
+
+@router.get("/student/{test_id}/analytics")
+def student_test_analytics(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    check_student(current_user)
+
+    test = db.query(Test).filter(
+        Test.id == test_id
+    ).first()
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    submission = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.student_user_id == current_user["user_id"],
+        TestSubmission.status == "submitted"
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
+
+    all_submissions = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.status == "submitted"
+    ).all()
+
+    scores = [
+        s.score_percentage
+        for s in all_submissions
+        if s.score_percentage is not None
+    ]
+
+    higher = sum(
+        1 for s in scores
+        if s > submission.score_percentage
+    )
+
+    student_answers = db.query(StudentAnswer).filter(
+        StudentAnswer.submission_id == submission.id
+    ).all()
+
+    total_questions = db.query(Question).filter(
+        Question.test_id == test_id
+    ).count()
+
+    correct = sum(
+        1 for a in student_answers
+        if a.awarded_marks and a.awarded_marks > 0
+    )
+
+    incorrect = len(student_answers) - correct
+    skipped = total_questions - len(student_answers)
+
+    return {
+        "summary": {
+            "score": submission.score_percentage,
+            "obtained_marks": submission.total_marks,
+            "correct_answers": correct,
+            "incorrect_answers": incorrect,
+            "skipped_questions": skipped,
+            "passed": submission.is_passed,
+            "submitted_at": submission.submitted_at
+        },
+
+        "comparison": {
+            "class_average": round(sum(scores) / len(scores), 2),
+            "highest_score": max(scores),
+            "lowest_score": min(scores),
+            "student_rank": higher + 1,
+            "total_students": len(scores),
+            "percentile": round(
+                ((len(scores) - higher) / len(scores)) * 100,
+                2
+            )
+        },
+
+        "score_breakdown": [
+            {
+                "label": "Correct",
+                "value": correct
+            },
+            {
+                "label": "Incorrect",
+                "value": incorrect
+            },
+            {
+                "label": "Skipped",
+                "value": skipped
+            }
+        ]
+    }
+
+
+
+@router.get("/instructor/{test_id}/overall-analytics")
+def overall_test_analytics(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Complete Test Analytics
+
+    Returns:
+    - Test Summary
+    - Student Statistics
+    - Score Distribution
+    - Performance Bands
+    - Leaderboard
+    - Submission Timeline
+    - Question Analytics
+    - Module Analytics
+    """
+
+    check_instructor(current_user)
+
+    # --------------------------------------------------------
+    # Test
+    # --------------------------------------------------------
+
+    test = db.query(Test).filter(Test.id == test_id).first()
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    submissions = (
+        db.query(TestSubmission)
+        .filter(
+            TestSubmission.test_id == test_id,
+            TestSubmission.status == "submitted"
+        )
+        .all()
+    )
+
+    if not submissions:
+        return {
+            "test_id": test.id,
+            "title": test.title,
+            "message": "No submissions yet"
+        }
+
+    scores = [
+        s.score_percentage or 0
+        for s in submissions
+    ]
+
+    total_submitted = len(submissions)
+
+    passed = sum(
+        1 for s in submissions
+        if s.is_passed
+    )
+
+    failed = total_submitted - passed
+
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
+
+    summary = {
+
+        "total_students": total_submitted,
+
+        "submitted": total_submitted,
+
+        "passed": passed,
+
+        "failed": failed,
+
+        "pass_rate": round(
+            (passed / total_submitted) * 100,
+            2
+        ),
+
+        "average_score": round(
+            sum(scores) / len(scores),
+            2
+        ),
+
+        "highest_score": max(scores),
+
+        "lowest_score": min(scores),
+
+        "median_score": statistics.median(scores),
+
+        "standard_deviation": (
+            round(statistics.stdev(scores), 2)
+            if len(scores) > 1 else 0
+        )
+    }
+
+    # --------------------------------------------------------
+    # Score Distribution
+    # --------------------------------------------------------
+
+    bucket_map = {}
+
+    for i in range(0, 100, 10):
+        bucket_map[f"{i}-{i+9}"] = 0
+
+    bucket_map["100"] = 0
+
+    for score in scores:
+
+        if score == 100:
+            bucket_map["100"] += 1
+
+        else:
+
+            start = int(score // 10) * 10
+
+            key = f"{start}-{start+9}"
+
+            if key in bucket_map:
+                bucket_map[key] += 1
+
+    score_distribution = [
+
+        {
+            "range": k,
+            "count": v
+        }
+
+        for k, v in bucket_map.items()
+
+    ]
+
+    # --------------------------------------------------------
+    # Performance Bands
+    # --------------------------------------------------------
+
+    performance_bands = {
+
+        "excellent": len(
+            [x for x in scores if x >= 90]
+        ),
+
+        "good": len(
+            [x for x in scores if 75 <= x < 90]
+        ),
+
+        "average": len(
+            [x for x in scores if 50 <= x < 75]
+        ),
+
+        "poor": len(
+            [x for x in scores if x < 50]
+        )
+
+    }
+
+    # --------------------------------------------------------
+    # Submission Timeline
+    # --------------------------------------------------------
+
+    timeline = {}
+
+    for sub in submissions:
+
+        if sub.submitted_at:
+
+            key = sub.submitted_at.strftime("%H:00")
+
+            timeline[key] = timeline.get(key, 0) + 1
+
+    submission_timeline = [
+
+        {
+            "hour": k,
+            "count": v
+        }
+
+        for k, v in sorted(timeline.items())
+
+    ]
+
+    # --------------------------------------------------------
+    # Leaderboard
+    # --------------------------------------------------------
+
+    leaderboard = []
+
+    ranked = sorted(
+        submissions,
+        key=lambda x: x.score_percentage or 0,
+        reverse=True
+    )
+
+    for rank, sub in enumerate(ranked, start=1):
+
+        student = db.query(User).filter(
+            User.id == sub.student_user_id
+        ).first()
+
+        leaderboard.append({
+
+            "rank": rank,
+
+            "student_user_id": student.id if student else None,
+
+            "student_id": student.student_id if student else None,
+
+            "student_name": student.name if student else "Unknown",
+
+            "score": sub.score_percentage,
+
+            "obtained_marks": sub.total_score,
+
+            "submitted_at": sub.submitted_at
+
+        })
+
+    # --------------------------------------------------------
+    # Question Analytics
+    # --------------------------------------------------------
+
+    questions = db.query(Question).filter(
+        Question.test_id == test_id
+    ).all()
+
+    question_analysis = []
+
+    total_correct = 0
+    total_attempted = 0
+
+    for question in questions:
+
+        answers = db.query(StudentAnswer).filter(
+            StudentAnswer.question_id == question.id
+        ).all()
+
+        attempted = len(answers)
+
+        correct = sum(
+            1
+            for a in answers
+            if (
+                a.awarded_marks is not None
+                and a.awarded_marks >= question.marks
+            )
+        )
+
+        incorrect = attempted - correct
+
+        skipped = total_submitted - attempted
+
+        total_correct += correct
+        total_attempted += attempted
+
+        wrong_answer = None
+
+        if question.question_type == "mcq":
+
+            wrong_ids = [
+
+                a.selected_option_id
+
+                for a in answers
+
+                if (
+                    a.awarded_marks == 0
+                    and a.selected_option_id
+                )
+
+            ]
+
+            if wrong_ids:
+
+                common = Counter(
+                    wrong_ids
+                ).most_common(1)[0][0]
+
+                option = db.query(Option).filter(
+                    Option.id == common
+                ).first()
+
+                if option:
+                    wrong_answer = option.text
+
+        question_analysis.append({
+
+            "question_id": question.id,
+
+            "question_text": question.text,
+
+            "question_type": question.question_type,
+
+            "module_id": question.module_id,
+
+            "max_marks": question.marks,
+
+            "attempted": attempted,
+
+            "correct": correct,
+
+            "incorrect": incorrect,
+
+            "skipped": skipped,
+
+            "attempt_rate": round(
+                attempted / total_submitted * 100,
+                2
+            ) if total_submitted else 0,
+
+            "success_rate": round(
+                correct / attempted * 100,
+                2
+            ) if attempted else 0,
+
+            "most_common_wrong_answer": wrong_answer
+
+        })
+
+    # --------------------------------------------------------
+    # Module Analytics
+    # --------------------------------------------------------
+
+    module_stats = {}
+
+    for q in questions:
+
+        module = db.query(Module).filter(
+            Module.id == q.module_id
+        ).first()
+
+        module_name = module.title if module else "Unknown"
+
+        if module_name not in module_stats:
+
+            module_stats[module_name] = {
+
+                "module_id": module.id if module else None,
+
+                "module_name": module_name,
+
+                "questions": 0,
+
+                "attempted": 0,
+
+                "correct": 0,
+
+                "marks": 0
+
+            }
+
+        module_stats[module_name]["questions"] += 1
+
+        answers = db.query(StudentAnswer).filter(
+            StudentAnswer.question_id == q.id
+        ).all()
+
+        module_stats[module_name]["attempted"] += len(answers)
+
+        module_stats[module_name]["correct"] += sum(
+
+            1
+
+            for a in answers
+
+            if (
+                a.awarded_marks is not None
+                and a.awarded_marks >= q.marks
+            )
+
+        )
+
+        module_stats[module_name]["marks"] += q.marks
+
+    module_analysis = []
+
+    for item in module_stats.values():
+
+        module_analysis.append({
+
+            **item,
+
+            "success_rate": round(
+
+                item["correct"] / item["attempted"] * 100,
+
+                2
+
+            ) if item["attempted"] else 0
+
+        })
+
+    # --------------------------------------------------------
+    # Top / Bottom Performers
+    # --------------------------------------------------------
+
+    top_5 = leaderboard[:5]
+
+    bottom_5 = sorted(
+        leaderboard,
+        key=lambda x: x["score"] or 0
+    )[:5]
+
+    # --------------------------------------------------------
+    # Final Response
+    # --------------------------------------------------------
+
+    return {
+
+        "test": {
+
+            "id": test.id,
+
+            "title": test.title,
+
+            "course_id": test.course_id,
+
+            "module_id": test.module_id,
+
+            "passing_percentage": test.passing_percentage,
+
+            "duration_minutes": test.duration_minutes
+
+        },
+
+        "summary": summary,
+
+        "score_distribution": score_distribution,
+
+        "performance_bands": performance_bands,
+
+        "submission_timeline": submission_timeline,
+
+        "leaderboard": leaderboard,
+
+        "top_performers": top_5,
+
+        "bottom_performers": bottom_5,
+
+        "question_analysis": question_analysis,
+
+        "module_analysis": module_analysis,
+
+        "overall_question_accuracy": round(
+            total_correct / total_attempted * 100,
+            2
+        ) if total_attempted else 0
+
+    }
+
+
+
+
+@router.get("/student/{test_id}/analytics")
+def student_test_analytics(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Student Test Analytics
+
+    Returns:
+    - Student Summary
+    - Comparison with class
+    - Score breakdown
+    - Question analysis
+    - Module analysis
+    - Performance trends
+    """
+
+    check_student(current_user)
+
+    # --------------------------------------------------------
+    # Test
+    # --------------------------------------------------------
+
+    test = db.query(Test).filter(
+        Test.id == test_id
+    ).first()
+
+    if not test:
+        raise HTTPException(
+            status_code=404,
+            detail="Test not found"
+        )
+
+    submission = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.student_user_id == current_user["user_id"],
+        TestSubmission.status == "submitted"
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="You have not submitted this test"
+        )
+
+    # --------------------------------------------------------
+    # Class statistics
+    # --------------------------------------------------------
+
+    all_submissions = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.status == "submitted"
+    ).all()
+
+    scores = [
+        s.score_percentage or 0
+        for s in all_submissions
+    ]
+
+    ranked = sorted(
+        scores,
+        reverse=True
+    )
+
+    student_rank = ranked.index(submission.score_percentage) + 1
+
+    percentile = round(
+        ((len(scores) - student_rank + 1) / len(scores)) * 100,
+        2
+    )
+
+    # --------------------------------------------------------
+    # Student Answers
+    # --------------------------------------------------------
+
+    answers = db.query(StudentAnswer).filter(
+        StudentAnswer.submission_id == submission.id
+    ).all()
+
+    questions = db.query(Question).filter(
+        Question.test_id == test_id
+    ).all()
+
+    total_questions = len(questions)
+
+    correct = 0
+    incorrect = 0
+    skipped = 0
+
+    question_analysis = []
+
+    module_stats = {}
+
+    for q in questions:
+
+        answer = next(
+            (
+                a for a in answers
+                if a.question_id == q.id
+            ),
+            None
+        )
+
+        module = db.query(Module).filter(
+            Module.id == q.module_id
+        ).first()
+
+        module_name = module.title if module else "Unknown"
+
+        if module_name not in module_stats:
+
+            module_stats[module_name] = {
+
+                "module_id": module.id if module else None,
+
+                "module_name": module_name,
+
+                "questions": 0,
+
+                "correct": 0,
+
+                "obtained_marks": 0,
+
+                "total_marks": 0
+
+            }
+
+        module_stats[module_name]["questions"] += 1
+        module_stats[module_name]["total_marks"] += q.marks
+
+        if answer is None:
+
+            skipped += 1
+
+            question_analysis.append({
+
+                "question_id": q.id,
+
+                "question_text": q.text,
+
+                "question_type": q.question_type,
+
+                "module": module_name,
+
+                "status": "Skipped",
+
+                "obtained_marks": 0,
+
+                "max_marks": q.marks
+
+            })
+
+            continue
+
+        obtained = answer.awarded_marks or 0
+
+        module_stats[module_name]["obtained_marks"] += obtained
+
+        is_correct = obtained >= q.marks
+
+        if is_correct:
+            correct += 1
+            module_stats[module_name]["correct"] += 1
+        else:
+            incorrect += 1
+
+        selected_option = None
+        correct_option = None
+
+        if q.question_type == "mcq":
+
+            if answer.selected_option_id:
+
+                option = db.query(Option).filter(
+                    Option.id == answer.selected_option_id
+                ).first()
+
+                if option:
+                    selected_option = option.text
+
+            correct_opt = db.query(Option).filter(
+                Option.question_id == q.id,
+                Option.is_correct == True
+            ).first()
+
+            if correct_opt:
+                correct_option = correct_opt.text
+
+        question_analysis.append({
+
+            "question_id": q.id,
+
+            "question_text": q.text,
+
+            "module": module_name,
+
+            "question_type": q.question_type,
+
+            "status": "Correct" if is_correct else "Incorrect",
+
+            "obtained_marks": obtained,
+
+            "max_marks": q.marks,
+
+            "selected_option": selected_option,
+
+            "correct_option": correct_option
+
+        })
+
+    # --------------------------------------------------------
+    # Module Analytics
+    # --------------------------------------------------------
+
+    module_analysis = []
+
+    for item in module_stats.values():
+
+        module_analysis.append({
+
+            **item,
+
+            "success_rate": round(
+
+                item["correct"] /
+
+                item["questions"] * 100,
+
+                2
+
+            ) if item["questions"] else 0,
+
+            "percentage": round(
+
+                item["obtained_marks"] /
+
+                item["total_marks"] * 100,
+
+                2
+
+            ) if item["total_marks"] else 0
+
+        })
+
+    # --------------------------------------------------------
+    # Score Breakdown
+    # --------------------------------------------------------
+
+    score_breakdown = {
+
+        "correct": correct,
+
+        "incorrect": incorrect,
+
+        "skipped": skipped
+
+    }
+
+    # --------------------------------------------------------
+    # Previous Attempts
+    # --------------------------------------------------------
+
+    previous_attempts = db.query(TestSubmission).filter(
+        TestSubmission.student_user_id == current_user["user_id"],
+        TestSubmission.test_id == test_id,
+        TestSubmission.status == "submitted"
+    ).order_by(
+        TestSubmission.submitted_at
+    ).all()
+
+    performance_history = [
+
+        {
+
+            "attempt": i + 1,
+
+            "score": s.score_percentage,
+
+            "submitted_at": s.submitted_at
+
+        }
+
+        for i, s in enumerate(previous_attempts)
+
+    ]
+
+    # --------------------------------------------------------
+    # Weakest / Strongest Module
+    # --------------------------------------------------------
+
+    strongest_module = None
+    weakest_module = None
+
+    if module_analysis:
+
+        strongest_module = max(
+            module_analysis,
+            key=lambda x: x["percentage"]
+        )
+
+        weakest_module = min(
+            module_analysis,
+            key=lambda x: x["percentage"]
+        )
+
+    # --------------------------------------------------------
+    # Return
+    # --------------------------------------------------------
+
+    return {
+
+        "test": {
+
+            "id": test.id,
+
+            "title": test.title,
+
+            "course_id": test.course_id,
+
+            "module_id": test.module_id,
+
+            "passing_percentage": test.passing_percentage,
+
+            "duration_minutes": test.duration_minutes
+
+        },
+
+        "summary": {
+
+            "score": submission.score_percentage,
+
+            "obtained_marks": submission.total_score,
+
+            "submitted_at": submission.submitted_at,
+
+            "passed": submission.is_passed,
+
+            "correct": correct,
+
+            "incorrect": incorrect,
+
+            "skipped": skipped,
+
+            "accuracy": round(
+
+                correct /
+
+                total_questions * 100,
+
+                2
+
+            ) if total_questions else 0
+
+        },
+
+        "comparison": {
+
+            "rank": student_rank,
+
+            "percentile": percentile,
+
+            "class_average": round(
+
+                statistics.mean(scores),
+
+                2
+
+            ),
+
+            "highest_score": max(scores),
+
+            "lowest_score": min(scores),
+
+            "median_score": statistics.median(scores)
+
+        },
+
+        "score_breakdown": score_breakdown,
+
+        "module_analysis": module_analysis,
+
+        "question_analysis": question_analysis,
+
+        "performance_history": performance_history,
+
+        "strongest_module": strongest_module,
+
+        "weakest_module": weakest_module
+
+    }

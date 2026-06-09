@@ -520,8 +520,15 @@ def instructor_enrollment_list(
         ).filter(InstructorEnrollment.user_id == inst.id).all()
 
         courses_list = list(set([f"{c.id} - {c.name}" for cl, c in enrollments]))
-        batches_list = [f"#{cl.batch_name}" for cl, c in enrollments if cl.batch_name]
-
+        batches_list = [
+            {
+                "classroom_id": e.Classroom.id,
+                "batch_name": e.Classroom.batch_name,
+                "course_id": e.Course.id,
+                "course_name": e.Course.name,
+            }
+            for e in enrollments
+        ]
         output.append({
             "id": str(inst.id),
             "name": inst.name,
@@ -566,8 +573,16 @@ def instructor_profile_detail(
     ).filter(InstructorEnrollment.user_id == instructor.id).all()
 
     courses_list = list(set([f"{c.id} - {c.name}" for cl, c in enrollments]))
-    batches_list = [f"#{cl.batch_name}" for cl, c in enrollments if cl.batch_name]
 
+    batches_list = [
+        {
+            "classroom_id": cl.id,
+            "batch_name": cl.batch_name,
+            "course_id": c.id,
+            "course_name": c.name,
+        }
+        for cl, c in enrollments
+    ]
     return {
         "id": str(instructor.id),
         "name": instructor.name,
@@ -704,8 +719,15 @@ def admin_student_detail(
     ).filter(Enrollment.user_id == student.id).all()
 
     primary_course = enrollments[0].Course.name if enrollments else "No Registered Course"
-    batches_list = [f"#{e.Classroom.batch_name}" for e in enrollments if e.Classroom.batch_name]
-
+    batches_list = [
+        {
+            "classroom_id": e.Classroom.id,
+            "batch_name": e.Classroom.batch_name,
+            "course_id": e.Course.id,
+            "course_name": e.Course.name,
+        }
+        for e in enrollments
+    ]
     # Pull real attendance rows logged for this individual
     att_records = db.query(SessionParticipant, ClassSession, Course).select_from(SessionParticipant).join(
         ClassSession, ClassSession.id == SessionParticipant.session_id

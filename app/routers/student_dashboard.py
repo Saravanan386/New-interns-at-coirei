@@ -626,13 +626,13 @@ def my_tests(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    require_student(current_user)
+    require_student(current_user) # Using your existing check_student helper
     user_id = current_user["user_id"]
 
     enrollments = db.query(Enrollment).filter(Enrollment.user_id == user_id).all()
 
     result = []
-    seen   = set()
+    seen = set()
 
     for en in enrollments:
         classroom = db.query(Classroom).filter(Classroom.id == en.classroom_id).first()
@@ -652,6 +652,10 @@ def my_tests(
             course = db.query(Course).filter(Course.id == test.course_id).first()
             module = db.query(Module).filter(Module.id == test.module_id).first()
 
+            # ── FETCH QUESTION COUNT ───────────────────────────────────────
+            # This directly gets the count of questions linked to this test
+            total_questions = db.query(Question).filter(Question.test_id == test.id).count()
+
             submission = db.query(TestSubmission).filter(
                 TestSubmission.test_id          == test.id,
                 TestSubmission.student_user_id  == user_id
@@ -665,6 +669,10 @@ def my_tests(
                 "course_code":      course.course_code if course else None,
                 "module_name":      module.title if module else None,
                 "batch_name":       test.batch_name,
+                
+                # Added field here:
+                "total_questions":  total_questions,
+                
                 "duration_minutes": getattr(test, "duration_minutes", 60) or 60,
                 "start_time":       test.start_time.strftime("%Y-%m-%d %I:%M %p") if test.start_time else None,
                 "end_time":         test.end_time.strftime("%Y-%m-%d %I:%M %p") if test.end_time else None,
@@ -676,8 +684,6 @@ def my_tests(
             })
 
     return result
-
-
 # -------------------------------------------------------------------
 # 9. START TEST — returns all questions (no correct answers leaked)
 # GET /dashboard/student/tests/{test_id}/start
