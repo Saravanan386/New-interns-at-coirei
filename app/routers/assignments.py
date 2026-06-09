@@ -521,8 +521,13 @@ def my_assignments(
             Assignment.course_id == classroom.course_id,
             Assignment.batch_name == classroom.batch_name
         ).all()
-
+        
         for assignment in assignments:
+
+            submission = db.query(AssignmentSubmission).filter(
+                AssignmentSubmission.assignment_id == assignment.id,
+                AssignmentSubmission.student_user_id == current_user["user_id"]
+            ).first()
 
             course = db.query(Course).filter(
                 Course.id == assignment.course_id
@@ -542,7 +547,8 @@ def my_assignments(
                 "module_name": module.title if module else None,
                 "batch_name": assignment.batch_name,
                 "due_date": assignment.due_date,
-                "created_at": assignment.created_at
+                "created_at": assignment.created_at,
+                "status": submission.status if submission else "not_submitted"
             })
 
     return result
@@ -1079,3 +1085,157 @@ def get_submission_details(
         "feedback": submission.feedback,
         "submitted_at": submission.submitted_at
     }
+
+@router.get("/{assignment_id}/student-submissions")
+def get_student_submissions(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_instructor(current_user)
+
+    assignment = db.query(Assignment).filter(
+        Assignment.id == assignment_id
+    ).first()
+
+    if not assignment:
+        raise HTTPException(
+            status_code=404,
+            detail="Assignment not found"
+        )
+
+    submissions = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.assignment_id == assignment_id
+    ).all()
+
+    result = []
+
+    for sub in submissions:
+
+        student = db.query(User).filter(
+            User.id == sub.student_user_id
+        ).first()
+
+        result.append({
+            "submission_id": sub.id,
+            "student_id": student.student_id if student else None,
+            "student_name": student.name if student else None,
+            "submission_text": sub.submission_text,
+            "submitted_at": sub.submitted_at,
+            "status": sub.status,
+            "grade": sub.grade,
+            "feedback": sub.feedback,
+            "file_name": sub.file_name,
+            "view_url": f"/assignments/submissions/{sub.id}/view" if sub.file_path else None,
+            "download_url": f"/assignments/submissions/{sub.id}/download" if sub.file_path else None
+        })
+
+    return {
+        "assignment_id": assignment.id,
+        "assignment_title": assignment.title,
+        "total_submissions": len(result),
+        "submissions": result
+    }
+
+from fastapi.responses import FileResponse
+
+@router.get("/submissions/{submission_id}/download")
+def download_submission_file(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_instructor(current_user)
+
+    submission = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.id == submission_id
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
+
+    if not submission.file_path:
+        raise HTTPException(
+            status_code=404,
+            detail="No file uploaded"
+        )
+
+    return FileResponse(
+        path=submission.file_path,
+        filename=submission.file_name
+    )
+
+@router.get("/submissions/{submission_id}")
+def get_submission_details(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_instructor(current_user)
+
+    submission = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.id == submission_id
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
+
+    student = db.query(User).filter(
+        User.id == submission.student_user_id
+    ).first()
+
+    return {
+        "submission_id": submission.id,
+        "student_id": student.student_id if student else None,
+        "student_name": student.name if student else None,
+        "submission_text": submission.submission_text,
+        "file_name": submission.file_name,
+        "grade": submission.grade,
+        "feedback": submission.feedback,
+        "status": submission.status,
+        "submitted_at": submission.submitted_at,
+        "view_url": f"/assignments/submissions/{submission.id}/view" if submission.file_path else None,
+        "download_url": f"/assignments/submissions/{submission.id}/download" if submission.file_path else None
+    }
+
+@router.get("/submissions/{submission_id}/view")
+def view_submission_file(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_instructor(current_user)
+
+    submission = db.query(
+        AssignmentSubmission
+    ).filter(
+        AssignmentSubmission.id == submission_id
+    ).first()
+
+    if not submission:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found"
+        )
+
+    if not submission.file_path:
+        raise HTTPException(
+            status_code=404,
+            detail="No file uploaded"
+        )
+
+    return FileResponse(
+        submission.file_path
+    )

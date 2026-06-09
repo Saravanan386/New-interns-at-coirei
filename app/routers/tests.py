@@ -1204,128 +1204,7 @@ def test_students(
     return result
 
 
-@router.get("/student/available")
-def student_available_tests(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    check_student(current_user)
 
-    # Get student's active enrollments
-    enrollments = (
-        db.query(Enrollment)
-        .join(
-            Classroom,
-            Classroom.id == Enrollment.classroom_id
-        )
-        .filter(
-            Enrollment.user_id == current_user["user_id"],
-            Enrollment.status == "ongoing"
-        )
-        .all()
-    )
-
-    results = []
-
-    for enrollment in enrollments:
-
-        classroom = (
-            db.query(Classroom)
-            .filter(
-                Classroom.id == enrollment.classroom_id
-            )
-            .first()
-        )
-
-        if not classroom:
-            continue
-
-        tests = (
-            db.query(Test)
-            .filter(
-                Test.course_id == classroom.course_id,
-                Test.batch_name == classroom.batch_name
-            )
-            .all()
-        )
-
-        for test in tests:
-
-            submission = (
-                db.query(TestSubmission)
-                .filter(
-                    TestSubmission.test_id == test.id,
-                    TestSubmission.student_user_id ==
-                    current_user["user_id"]
-                )
-                .first()
-            )
-
-            if not submission:
-                status = "not_started"
-
-            elif submission.status == "in_progress":
-                status = "in_progress"
-
-            else:
-                status = "completed"
-
-            results.append({
-
-                "test_id": test.id,
-
-                "title": test.title,
-
-                "description": test.description,
-
-                "course": {
-                    "id": test.course.id
-                    if test.course else None,
-
-                    "name": test.course.name
-                    if test.course else None
-                },
-
-                "module": {
-                    "id": test.module.id
-                    if test.module else None,
-
-                    "name": test.module.title
-                    if test.module else None
-                },
-
-                "batch_name": test.batch_name,
-
-                "start_time": test.start_time,
-
-                "end_time": test.end_time,
-
-                "total_questions": len(test.questions),
-
-                "status": status,
-
-                "submission_id":
-                    submission.id
-                    if submission else None,
-
-                "obtained_marks":
-                    submission.obtained_marks
-                    if submission else None,
-
-                "total_marks":
-                    submission.total_marks
-                    if submission else None,
-
-                "percentage":
-                    submission.score_percentage
-                    if submission else None,
-
-                "is_passed":
-                    submission.is_passed
-                    if submission else None
-            })
-
-    return results
 
 
 @router.get("/instructor/all-tests-metadata")
@@ -1396,3 +1275,389 @@ def get_instructor_tests_metadata(
         })
 
     return result
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+from typing import Optional, List
+ 
+from app.database import get_db
+from app.utils.security import get_current_user
+ 
+from app.models.user        import User
+from app.models.enrollment  import Enrollment
+from app.models.classroom   import Classroom
+from app.models.course      import Course
+from app.models.module      import Module, Chapter
+from app.models.chapter_resources import ChapterResource
+from app.models.assignment  import Assignment, AssignmentResource, AssignmentSubmission
+from app.models.test        import (
+    Test, Question, Option,
+    TestSubmission, StudentAnswer
+)
+ 
+ 
+# ── shared helpers ────────────────────────────────────────────────────────────
+ 
+def check_student(current_user: dict):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access only")
+ 
+ 
+def check_instructor(current_user: dict):
+    if current_user.get("role") != "instructor":
+        raise HTTPException(status_code=403, detail="Instructor access only")
+ 
+ 
+def _fmt_dt(dt: Optional[datetime]) -> Optional[str]:
+    if not dt:
+        return None
+    return dt.strftime("%Y-%m-%d %I:%M %p")
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+#  ROUTER 1 – Tests  (prefix="/tests")
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+tests_router = APIRouter(prefix="/tests", tags=["Tests"])
+ 
+ 
+# ── 1. Student: full result with answers ─────────────────────────────────────
+ 
+@tests_router.get("/student/{test_id}/result")
+def student_test_result(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Returns every question with:
+    - what the student answered
+    - the correct answer
+    - marks awarded vs max marks
+    - overall score / pass status
+    """
+    check_student(current_user)
+    user_id = current_user["user_id"]
+ 
+    submission = db.query(TestSubmission).filter(
+        TestSubmission.test_id          == test_id,
+        TestSubmission.student_user_id  == user_id
+    ).first()
+ 
+    if not submission:
+        raise HTTPException(status_code=404, detail="No submission found for this test")
+ 
+    test   = db.query(Test).filter(Test.id == test_id).first()
+    module = db.query(Module).filter(Module.id == test.module_id).first() if test else None
+    course = db.query(Course).filter(Course.id == test.course_id).first() if test else None
+ 
+    # Build answer lookup: question_id → StudentAnswer
+    answer_map = {a.question_id: a for a in submission.answers}
+ 
+    questions_data = []
+    for question in db.query(Question).filter(Question.test_id == test_id).all():
+ 
+        sa = answer_map.get(question.id)
+ 
+        # ── resolve student's answer as human-readable text ──────
+        student_answer_text  = None
+        student_answer_id    = None
+ 
+        if sa:
+            if question.question_type == "mcq" and sa.selected_option_id:
+                opt = db.query(Option).filter(Option.id == sa.selected_option_id).first()
+                student_answer_text = opt.text if opt else None
+                student_answer_id   = sa.selected_option_id
+ 
+            elif question.question_type == "checkbox" and sa.selected_option_ids:
+                ids = [
+                    int(i) for i in sa.selected_option_ids.split(",")
+                    if i.strip().isdigit()
+                ]
+                opts = db.query(Option).filter(Option.id.in_(ids)).all()
+                student_answer_text = ", ".join(o.text for o in opts)
+                student_answer_id   = sa.selected_option_ids
+ 
+            else:
+                student_answer_text = sa.text_answer
+ 
+        # ── resolve correct answer ────────────────────────────────
+        correct_answer_text = None
+        correct_option_ids  = []
+ 
+        if question.question_type in ("mcq", "checkbox"):
+            correct_opts = db.query(Option).filter(
+                Option.question_id == question.id,
+                Option.is_correct  == True
+            ).all()
+            correct_answer_text = ", ".join(o.text for o in correct_opts)
+            correct_option_ids  = [o.id for o in correct_opts]
+        else:
+            correct_answer_text = question.expected_answer
+ 
+        # ── is this answer correct? ───────────────────────────────
+        is_correct = bool(sa and sa.awarded_marks and sa.awarded_marks >= question.marks)
+ 
+        # ── all options (for MCQ/checkbox display) ────────────────
+        all_options = []
+        if question.question_type in ("mcq", "checkbox"):
+            for opt in db.query(Option).filter(Option.question_id == question.id).all():
+                all_options.append({
+                    "option_id":  opt.id,
+                    "text":       opt.text,
+                    "is_correct": opt.is_correct,
+                })
+ 
+        questions_data.append({
+            "question_id":          question.id,
+            "question_text":        question.text,
+            "question_type":        question.question_type,
+            "max_marks":            question.marks,
+            "awarded_marks":        sa.awarded_marks if sa else 0,
+            "is_correct":           is_correct,
+ 
+            # What the student picked / wrote
+            "student_answer":       student_answer_text,
+            "student_answer_id":    student_answer_id,
+ 
+            # Ground truth
+            "correct_answer":       correct_answer_text,
+            "correct_option_ids":   correct_option_ids,
+ 
+            # Full option list so frontend can highlight
+            "options":              all_options,
+        })
+ 
+    return {
+        "test_id":          test_id,
+        "title":            test.title if test else None,
+        "description":      test.description if test else None,
+        "course_name":      course.name if course else None,
+        "module_name":      module.title if module else None,
+ 
+        "submission_id":    submission.id,
+        "status":           submission.status,
+        "started_at":       _fmt_dt(submission.started_at),
+        "submitted_at":     _fmt_dt(submission.submitted_at),
+ 
+        "obtained_marks":   submission.obtained_marks,
+        "total_marks":      submission.total_marks,
+        "score_percentage": submission.score_percentage,
+        "is_passed":        submission.is_passed,
+ 
+        "total_questions":  len(questions_data),
+        "correct_count":    sum(1 for q in questions_data if q["is_correct"]),
+        "wrong_count":      sum(1 for q in questions_data if not q["is_correct"]),
+ 
+        "questions":        questions_data,
+    }
+ 
+ 
+# ── 2. Student: available tests (with obtainable_marks) ──────────────────────
+ 
+@tests_router.get("/student/available")
+def student_available_tests(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    All tests for the student's enrolled batches.
+    Includes obtainable_marks (sum of all question marks) and
+    submission status/score if already attempted.
+    """
+    check_student(current_user)
+    user_id = current_user["user_id"]
+ 
+    enrollments = (
+        db.query(Enrollment)
+        .join(Classroom, Classroom.id == Enrollment.classroom_id)
+        .filter(
+            Enrollment.user_id   == user_id,
+            Enrollment.status    == "ongoing"
+        ).all()
+    )
+ 
+    results = []
+    seen    = set()
+ 
+    for en in enrollments:
+        classroom = db.query(Classroom).filter(Classroom.id == en.classroom_id).first()
+        if not classroom:
+            continue
+ 
+        tests = db.query(Test).filter(
+            Test.course_id  == classroom.course_id,
+            Test.batch_name == classroom.batch_name
+        ).all()
+ 
+        for test in tests:
+            if test.id in seen:
+                continue
+            seen.add(test.id)
+ 
+            course = db.query(Course).filter(Course.id == test.course_id).first()
+            module = db.query(Module).filter(Module.id == test.module_id).first()
+ 
+            # Sum all question marks to get obtainable_marks
+            questions = db.query(Question).filter(Question.test_id == test.id).all()
+            obtainable_marks = sum(q.marks for q in questions)
+ 
+            submission = db.query(TestSubmission).filter(
+                TestSubmission.test_id          == test.id,
+                TestSubmission.student_user_id  == user_id
+            ).first()
+ 
+            if not submission:
+                status = "not_started"
+            elif submission.status == "in_progress":
+                status = "in_progress"
+            else:
+                status = "completed"
+ 
+            results.append({
+                "test_id":           test.id,
+                "title":             test.title,
+                "description":       test.description,
+ 
+                "course": {
+                    "id":   course.id   if course else None,
+                    "name": course.name if course else None,
+                    "code": course.course_code if course else None,
+                },
+                "module": {
+                    "id":   module.id    if module else None,
+                    "name": module.title if module else None,
+                },
+ 
+                "batch_name":        test.batch_name,
+                "start_time":        _fmt_dt(test.start_time),
+                "end_time":          _fmt_dt(test.end_time),
+ 
+                "total_questions":   len(questions),
+                "obtainable_marks":  obtainable_marks,   # ← NEW
+ 
+                "status":            status,
+                "submission_id":     submission.id               if submission else None,
+                "obtained_marks":    submission.obtained_marks   if submission else None,
+                "total_marks":       submission.total_marks      if submission else None,
+                "score_percentage":  submission.score_percentage if submission else None,
+                "is_passed":         submission.is_passed        if submission else None,
+                "submitted_at":      _fmt_dt(submission.submitted_at) if submission else None,
+            })
+ 
+    return results
+ 
+
+
+@tests_router.get("/instructor/{test_id}/analytics")
+def test_analytics(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Returns:
+    - Overall stats (avg, highest, lowest, pass rate)
+    - Score distribution in 10-point buckets (0-10, 11-20 … 91-100)
+    - Per-question analysis (attempt rate, success rate, most common wrong answer)
+    """
+    check_instructor(current_user)
+ 
+    test = db.query(Test).filter(Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+ 
+    submissions = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.status  == "submitted"
+    ).all()
+ 
+    if not submissions:
+        return {
+            "test_id":    test_id,
+            "title":      test.title,
+            "message":    "No submissions yet",
+            "total_submitted": 0,
+        }
+ 
+    scores = [s.score_percentage for s in submissions if s.score_percentage is not None]
+ 
+    # ── score distribution ────────────────────────────────────────
+    buckets = {f"{i}-{i+9}": 0 for i in range(0, 100, 10)}
+    buckets["100"] = 0
+    for sc in scores:
+        if sc == 100:
+            buckets["100"] += 1
+        else:
+            bucket_key = f"{int(sc // 10) * 10}-{int(sc // 10) * 10 + 9}"
+            if bucket_key in buckets:
+                buckets[bucket_key] += 1
+ 
+    score_distribution = [
+        {"range": k, "count": v}
+        for k, v in buckets.items()
+    ]
+ 
+    # ── per-question analysis ─────────────────────────────────────
+    questions      = db.query(Question).filter(Question.test_id == test_id).all()
+    total_students = len(submissions)
+ 
+    question_analysis = []
+    for q in questions:
+        answers = db.query(StudentAnswer).filter(StudentAnswer.question_id == q.id).all()
+ 
+        attempted = len(answers)
+        correct   = sum(1 for a in answers if a.awarded_marks and a.awarded_marks >= q.marks)
+        skipped   = total_students - attempted
+ 
+        # Most common wrong answer (MCQ only)
+        most_common_wrong = None
+        if q.question_type == "mcq":
+            wrong_answers = [
+                a.selected_option_id for a in answers
+                if a.awarded_marks == 0 and a.selected_option_id
+            ]
+            if wrong_answers:
+                from collections import Counter
+                most_common_id = Counter(wrong_answers).most_common(1)[0][0]
+                opt = db.query(Option).filter(Option.id == most_common_id).first()
+                most_common_wrong = opt.text if opt else None
+ 
+        question_analysis.append({
+            "question_id":        q.id,
+            "question_text":      q.text,
+            "question_type":      q.question_type,
+            "max_marks":          q.marks,
+            "attempted":          attempted,
+            "skipped":            skipped,
+            "correct":            correct,
+            "incorrect":          attempted - correct,
+            "attempt_rate":       round((attempted / total_students) * 100, 1) if total_students else 0,
+            "success_rate":       round((correct   / attempted)      * 100, 1) if attempted      else 0,
+            "most_common_wrong":  most_common_wrong,
+        })
+ 
+    return {
+        "test_id":   test_id,
+        "title":     test.title,
+ 
+        # ── overall stats ────────────────────────────────────────
+        "overall": {
+            "total_submitted": len(submissions),
+            "passed":          sum(1 for s in submissions if s.is_passed),
+            "failed":          sum(1 for s in submissions if s.is_passed is False),
+            "average_score":   round(sum(scores) / len(scores), 2) if scores else 0,
+            "highest_score":   max(scores) if scores else 0,
+            "lowest_score":    min(scores) if scores else 0,
+            "pass_rate":       round(
+                sum(1 for s in submissions if s.is_passed) / len(submissions) * 100, 2
+            ),
+        },
+ 
+        # ── distribution ─────────────────────────────────────────
+        "score_distribution": score_distribution,
+ 
+        # ── per-question breakdown ────────────────────────────────
+        "question_analysis": question_analysis,
+    }
+  
