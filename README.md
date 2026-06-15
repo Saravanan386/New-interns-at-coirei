@@ -109,6 +109,7 @@ API Documentation will be available at: `http://localhost:8000/docs`
 - `seed_db.py`: Populates the database with initial admin users and sample courses.
 - `cleanup_db.py`: Clears all tables in the database (Use with caution!).
 - `selective_cleanup.py`: Selectively removes sessions or enrollments.
+- `show_structure.py`: Prints the full repository structure plus Docker + API summary.
 - `migrate_add_host_url.py`: Example migration script for updating schema.
 
 ---
