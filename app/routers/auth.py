@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas import (
     InstructorRegistrationRequest,
@@ -23,6 +24,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     role: str
+    tenant_name: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -71,22 +73,44 @@ def register_student_api(
 
 @router.post("/register")
 def register(payload: RegisterRequest):
-    if payload.role not in ["admin", "instructor", "student"]:
+    role = payload.role.strip().lower()
+    email = payload.email.strip().lower()
+    tenant_name = payload.tenant_name.strip() if payload.tenant_name else payload.name
+
+    if role not in ["admin", "instructor", "student"]:
         raise HTTPException(status_code=400, detail="Invalid role")
 
     db = SessionLocal()
     try:
         user = User(
             name=payload.name,
-            email=payload.email,
+            email=email,
             password_hash=hash_password(payload.password),
-            role=payload.role,
+            role=role,
         )
         db.add(user)
+        db.flush()
+
+        tenant = Tenant(
+            user_id=user.id,
+            name=tenant_name,
+            branch="",
+        )
+        db.add(tenant)
         db.commit()
         db.refresh(user)
+        db.refresh(tenant)
 
-        return {"id": user.id, "email": user.email, "role": user.role}
+        return {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "tenant": {
+                "id": tenant.id,
+                "name": tenant.name,
+                "branch": tenant.branch,
+            },
+        }
 
     except IntegrityError:
         db.rollback()

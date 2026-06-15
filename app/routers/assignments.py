@@ -92,6 +92,13 @@ def can_access_assignment(db: Session, assignment: Assignment, current_user: dic
     return False
 
 
+def can_access_submission(submission: AssignmentSubmission, current_user: dict) -> bool:
+    role = current_user.get("role")
+    if role in ("instructor", "admin"):
+        return True
+    return role == "student" and submission.student_user_id == current_user.get("user_id")
+
+
 # ── Step 1 Dropdown Helpers ───────────────────────────────────────────────────
 
 @router.get("/courses")
@@ -941,6 +948,9 @@ def assignment_details(
 
     return {
         "assignment_id": assignment.id,
+        "course_id": assignment.course_id,
+        "course_code": assignment.course.course_code if assignment.course else None,
+        "course_name": assignment.course.name if assignment.course else None,
         "title": assignment.title,
         "description": assignment.description,
         "objective": assignment.objective,
@@ -958,8 +968,8 @@ def assignment_details(
             for r in resources
         ]
     }
-@router.get("/{assignment_id}/submitted-resources")
-def get_assignment_submissions(
+@router.get("/legacy/{assignment_id}/submitted-resources", include_in_schema=False)
+def legacy_get_assignment_submissions(
     assignment_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -1075,6 +1085,9 @@ def get_submission_details(
             detail="Submission not found"
         )
 
+    if not can_access_submission(submission, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this submission")
+
     student = db.query(User).filter(
         User.id == submission.student_user_id
     ).first()
@@ -1085,6 +1098,8 @@ def get_submission_details(
         "student_name": student.name if student else None,
         "submission_text": submission.submission_text,
         "file_name": submission.file_name,
+        "view_url": f"/assignments/submissions/{submission.id}/view" if submission.file_path else None,
+        "download_url": f"/assignments/submissions/{submission.id}/download" if submission.file_path else None,
         "grade": submission.grade,
         "feedback": submission.feedback,
         "submitted_at": submission.submitted_at
@@ -1151,8 +1166,6 @@ def download_submission_file(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    require_instructor(current_user)
-
     submission = db.query(
         AssignmentSubmission
     ).filter(
@@ -1171,6 +1184,12 @@ def download_submission_file(
             detail="No file uploaded"
         )
 
+    if not can_access_submission(submission, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this submission")
+
+    if not os.path.exists(submission.file_path):
+        raise HTTPException(status_code=404, detail="File missing from server")
+
     return FileResponse(
         path=submission.file_path,
         filename=submission.file_name
@@ -1182,8 +1201,6 @@ def get_submission_details(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    require_instructor(current_user)
-
     submission = db.query(
         AssignmentSubmission
     ).filter(
@@ -1195,6 +1212,9 @@ def get_submission_details(
             status_code=404,
             detail="Submission not found"
         )
+
+    if not can_access_submission(submission, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this submission")
 
     student = db.query(User).filter(
         User.id == submission.student_user_id
@@ -1220,8 +1240,6 @@ def view_submission_file(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    require_instructor(current_user)
-
     submission = db.query(
         AssignmentSubmission
     ).filter(
@@ -1240,6 +1258,13 @@ def view_submission_file(
             detail="No file uploaded"
         )
 
+    if not can_access_submission(submission, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this submission")
+
+    if not os.path.exists(submission.file_path):
+        raise HTTPException(status_code=404, detail="File missing from server")
+
     return FileResponse(
-        submission.file_path
+        submission.file_path,
+        filename=submission.file_name
     )

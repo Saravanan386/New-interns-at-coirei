@@ -1,6 +1,9 @@
 # app/routers/resources.py
 
-from fastapi import APIRouter, Depends
+import os
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -16,6 +19,27 @@ router = APIRouter(
     prefix="/resources",
     tags=["Resources"]
 )
+
+
+def can_access_resource(db: Session, resource: ChapterResource, current_user: dict) -> bool:
+    if current_user.get("role") in ("instructor", "admin"):
+        return True
+
+    chapter = db.query(Chapter).filter(Chapter.id == resource.chapter_id).first()
+    module = db.query(Module).filter(Module.id == chapter.module_id).first() if chapter else None
+    if not module:
+        return False
+
+    return (
+        db.query(Enrollment)
+        .join(Classroom, Classroom.id == Enrollment.classroom_id)
+        .filter(
+            Enrollment.user_id == current_user["user_id"],
+            Classroom.course_id == module.course_id,
+        )
+        .first()
+        is not None
+    )
 
 
 @router.get("/my")
@@ -47,6 +71,7 @@ def my_resources(
     resources = []
 
     for classroom in classrooms:
+        course = db.query(Course).filter(Course.id == classroom.course_id).first()
 
         modules = (
             db.query(Module)
@@ -81,6 +106,8 @@ def my_resources(
                     resources.append({
                         "resource_id": file.id,
                         "course_id": classroom.course_id,
+                        "course_code": course.course_code if course else None,
+                        "course_name": course.name if course else None,
                         "batch_name": classroom.batch_name,
                         "module_id": module.id,
                         "module_title": module.title,
@@ -88,6 +115,8 @@ def my_resources(
                         "chapter_title": chapter.title,
                         "file_name": file.file_name,
                         "file_path": file.file_path,
+                        "view_url": f"/resources/{file.id}/view",
+                        "download_url": f"/resources/{file.id}/download",
                         "uploaded_at": file.uploaded_at
                     })
 
@@ -95,6 +124,43 @@ def my_resources(
         "total_resources": len(resources),
         "resources": resources
     }
+
+
+@router.get("/{resource_id}/view")
+def view_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    resource = db.query(ChapterResource).filter(ChapterResource.id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not can_access_resource(db, resource, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this resource")
+    if not os.path.exists(resource.file_path):
+        raise HTTPException(status_code=404, detail="File missing from server")
+
+    return FileResponse(resource.file_path, filename=resource.file_name)
+
+
+@router.get("/{resource_id}/download")
+def download_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    resource = db.query(ChapterResource).filter(ChapterResource.id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not can_access_resource(db, resource, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this resource")
+    if not os.path.exists(resource.file_path):
+        raise HTTPException(status_code=404, detail="File missing from server")
+
+    return FileResponse(
+        path=resource.file_path,
+        filename=resource.file_name,
+    )
 
 
 @router.get("/instructor")

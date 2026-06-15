@@ -880,8 +880,8 @@ def instructor_test_dashboard(
 
 
 
-@router.get("/instructor/{test_id}/analytics")
-def test_analytics(
+@router.get("/legacy/instructor/{test_id}/analytics", include_in_schema=False)
+def legacy_test_analytics(
     test_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
@@ -1659,8 +1659,8 @@ def test_analytics(
     }
   
 
-@router.get("/student/{test_id}/analytics")
-def student_test_analytics(
+@router.get("/legacy/student/{test_id}/analytics", include_in_schema=False)
+def legacy_student_test_analytics(
     test_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)

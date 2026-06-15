@@ -1,4 +1,5 @@
 from .user import User
+from .tenant import Tenant
 from .course import Course
 from .classroom import Classroom
 from .attendance import SessionParticipant

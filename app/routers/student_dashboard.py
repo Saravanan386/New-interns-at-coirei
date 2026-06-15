@@ -22,6 +22,8 @@ from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.test import Test, TestSubmission, Question, Option, StudentAnswer
 from app.models.registration_profile import StudentInformation
 from app.models.announcements import Announcement
+from app.models.schedule import CourseSchedule
+from app.models.chat import ChatPost
 
 
 # -------------------------------------------------------------------
@@ -40,6 +42,55 @@ def require_student(current_user: dict):
     if current_user.get("role") != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     return True
+
+
+def _student_classrooms(db: Session, user_id: int):
+    enrollments = db.query(Enrollment).filter(Enrollment.user_id == user_id).all()
+    classroom_ids = [e.classroom_id for e in enrollments]
+    if not classroom_ids:
+        return []
+    return db.query(Classroom).filter(Classroom.id.in_(classroom_ids)).all()
+
+
+def _assignment_status(assignment: Assignment, submission: AssignmentSubmission | None) -> str:
+    if submission and submission.status in ("submitted", "graded"):
+        return "completed"
+    if submission:
+        return "in_progress"
+    if assignment.due_date and assignment.due_date < datetime.now():
+        return "overdue"
+    return "due"
+
+
+def _assignment_counts(db: Session, user_id: int) -> dict:
+    counts = {"completed": 0, "due": 0, "overdue": 0}
+    seen = set()
+
+    for classroom in _student_classrooms(db, user_id):
+        assignments = db.query(Assignment).filter(
+            Assignment.course_id == classroom.course_id,
+            Assignment.batch_name == classroom.batch_name,
+        ).all()
+
+        for assignment in assignments:
+            if assignment.id in seen:
+                continue
+            seen.add(assignment.id)
+
+            submission = db.query(AssignmentSubmission).filter(
+                AssignmentSubmission.assignment_id == assignment.id,
+                AssignmentSubmission.student_user_id == user_id,
+            ).first()
+            status = _assignment_status(assignment, submission)
+            if status == "completed":
+                counts["completed"] += 1
+            elif status == "overdue":
+                counts["overdue"] += 1
+            else:
+                counts["due"] += 1
+
+    counts["total"] = sum(counts.values())
+    return counts
 
 
 # -------------------------------------------------------------------
@@ -180,6 +231,7 @@ def dashboard_home(
             "assignments_total":    assignments_total,
             "assignments_pending":  assignments_pending,
             "assignments_submitted": assignments_submitted,
+            "assignments_count":     _assignment_counts(db, user_id),
             "tests_total":          tests_total,
             "tests_attempted":      tests_attempted,
             "average_score":        average_score,
@@ -246,6 +298,99 @@ def student_overview(
         "live_sessions":         live_sessions,
         "attendance_percentage": attendance_percentage,
     }
+
+
+@router.get("/live-now")
+def live_now(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    return live_classes(db, current_user)
+
+
+@router.get("/upcoming-classes")
+def upcoming_classes(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    user_id = current_user["user_id"]
+    now = datetime.now()
+    data = []
+
+    for classroom in _student_classrooms(db, user_id):
+        course = db.query(Course).filter(Course.id == classroom.course_id).first()
+        instructor = (
+            db.query(User).filter(User.id == classroom.instructor_id).first()
+            if classroom.instructor_id else None
+        )
+
+        sessions = db.query(ClassSession).filter(
+            ClassSession.classroom_id == classroom.id,
+            ClassSession.start_time != None,
+            ClassSession.start_time >= now,
+        ).order_by(ClassSession.start_time.asc()).limit(10).all()
+
+        for session in sessions:
+            data.append({
+                "session_id": session.id,
+                "topic": getattr(session, "topic", None) or (course.name if course else None),
+                "course_id": course.id if course else classroom.course_id,
+                "course_name": course.name if course else None,
+                "course_code": course.course_code if course else None,
+                "batch_name": classroom.batch_name,
+                "instructor_id": classroom.instructor_id,
+                "instructor_name": instructor.name if instructor else classroom.instructor_name,
+                "start_time": session.start_time,
+                "end_time": session.end_time,
+                "join_url": session.join_url,
+                "status": session.status,
+            })
+
+    data.sort(key=lambda item: item["start_time"] or datetime.max)
+    return {"total": len(data), "classes": data}
+
+
+@router.get("/upcoming-schedule")
+def upcoming_schedule(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    data = []
+
+    for classroom in _student_classrooms(db, current_user["user_id"]):
+        course = db.query(Course).filter(Course.id == classroom.course_id).first()
+        schedules = db.query(CourseSchedule).filter(
+            CourseSchedule.course_id == classroom.course_id,
+            CourseSchedule.batch_name == classroom.batch_name,
+        ).all()
+
+        for schedule in schedules:
+            data.append({
+                "schedule_id": schedule.id,
+                "course_id": classroom.course_id,
+                "course_name": course.name if course else None,
+                "course_code": course.course_code if course else None,
+                "batch_name": classroom.batch_name,
+                "day_of_week": schedule.day_of_week,
+                "session_type": schedule.session_type,
+                "topic": schedule.topic,
+                "start_time": schedule.start_time,
+                "end_time": schedule.end_time,
+                "instructor_name": schedule.instructor_name or classroom.instructor_name,
+            })
+
+    return {"total": len(data), "schedule": data}
+
+
+@router.get("/assignments/summary")
+def assignment_summary(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    return _assignment_counts(db, current_user["user_id"])
 
 
 # -------------------------------------------------------------------
@@ -684,6 +829,163 @@ def my_tests(
             })
 
     return result
+
+
+@router.get("/test-analytics")
+def test_analytics_summary(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    user_id = current_user["user_id"]
+
+    submissions = db.query(TestSubmission).filter(
+        TestSubmission.student_user_id == user_id
+    ).all()
+    submitted = [s for s in submissions if s.status == "submitted"]
+    scores = [s.score_percentage for s in submitted if s.score_percentage is not None]
+
+    return {
+        "tests_started": len(submissions),
+        "tests_submitted": len(submitted),
+        "tests_in_progress": sum(1 for s in submissions if s.status == "in_progress"),
+        "tests_passed": sum(1 for s in submitted if s.is_passed is True),
+        "tests_failed": sum(1 for s in submitted if s.is_passed is False),
+        "average_score": round(sum(scores) / len(scores), 2) if scores else 0,
+        "highest_score": max(scores) if scores else 0,
+        "lowest_score": min(scores) if scores else 0,
+        "recent_results": [
+            {
+                "submission_id": s.id,
+                "test_id": s.test_id,
+                "test_title": s.test.title if s.test else None,
+                "status": s.status,
+                "score_percentage": s.score_percentage,
+                "is_passed": s.is_passed,
+                "started_at": s.started_at,
+                "submitted_at": s.submitted_at,
+            }
+            for s in sorted(
+                submitted,
+                key=lambda item: item.submitted_at or datetime.min,
+                reverse=True,
+            )[:10]
+        ],
+    }
+
+
+@router.get("/tests/{test_id}/analytics")
+def student_test_analytics_detail(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    user_id = current_user["user_id"]
+
+    test = db.query(Test).filter(Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+
+    submission = db.query(TestSubmission).filter(
+        TestSubmission.test_id == test_id,
+        TestSubmission.student_user_id == user_id,
+    ).first()
+
+    questions = db.query(Question).filter(Question.test_id == test_id).all()
+    answers = (
+        db.query(StudentAnswer).filter(StudentAnswer.submission_id == submission.id).all()
+        if submission else []
+    )
+    answer_map = {answer.question_id: answer for answer in answers}
+
+    correct = 0
+    incorrect = 0
+    skipped = 0
+    question_answers = []
+
+    for question in questions:
+        answer = answer_map.get(question.id)
+        if not answer:
+            skipped += 1
+            question_answers.append({
+                "question_id": question.id,
+                "question": question.text,
+                "status": "skipped",
+                "answer": None,
+                "awarded_marks": 0,
+                "max_marks": question.marks,
+            })
+            continue
+
+        is_correct = (answer.awarded_marks or 0) >= question.marks
+        correct += 1 if is_correct else 0
+        incorrect += 0 if is_correct else 1
+        question_answers.append({
+            "question_id": question.id,
+            "question": question.text,
+            "question_type": question.question_type,
+            "status": "correct" if is_correct else "incorrect",
+            "selected_option_id": answer.selected_option_id,
+            "selected_option_ids": answer.selected_option_ids,
+            "text_answer": answer.text_answer,
+            "awarded_marks": answer.awarded_marks,
+            "max_marks": answer.max_marks,
+        })
+
+    return {
+        "test": {
+            "id": test.id,
+            "title": test.title,
+            "status": submission.status if submission else "not_started",
+            "started_at": submission.started_at if submission else None,
+            "submitted_at": submission.submitted_at if submission else None,
+            "end_time": test.end_time,
+        },
+        "summary": {
+            "total_questions": len(questions),
+            "answered_questions": len(answers),
+            "skipped_questions": skipped,
+            "correct_answers": correct,
+            "incorrect_answers": incorrect,
+            "obtained_marks": submission.obtained_marks if submission else 0,
+            "total_marks": submission.total_marks if submission else sum(q.marks for q in questions),
+            "score_percentage": submission.score_percentage if submission else None,
+            "is_passed": submission.is_passed if submission else None,
+        },
+        "answers": question_answers,
+    }
+
+
+@router.get("/faqs")
+def student_faqs(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_student(current_user)
+    faqs = []
+
+    for classroom in _student_classrooms(db, current_user["user_id"]):
+        course = db.query(Course).filter(Course.id == classroom.course_id).first()
+        posts = db.query(ChatPost).filter(
+            ChatPost.course_id == classroom.course_id,
+            ChatPost.batch_name == classroom.batch_name,
+            ChatPost.visibility == "public",
+        ).order_by(ChatPost.is_pinned.desc(), ChatPost.created_at.desc()).limit(20).all()
+
+        for post in posts:
+            faqs.append({
+                "question_id": post.id,
+                "course_id": post.course_id,
+                "course_name": course.name if course else None,
+                "batch_name": post.batch_name,
+                "question": post.content,
+                "is_pinned": post.is_pinned,
+                "reply_count": len(post.replies),
+                "created_at": post.created_at,
+            })
+
+    return {"total": len(faqs), "faqs": faqs}
 # -------------------------------------------------------------------
 # 9. START TEST — returns all questions (no correct answers leaked)
 # GET /dashboard/student/tests/{test_id}/start
@@ -814,10 +1116,14 @@ def submit_test(
     total_marks    = 0.0
     obtained_marks = 0.0
 
+    answered_question_ids = set()
+
     for ans in payload.answers:
         question = db.query(Question).filter(Question.id == ans.question_id).first()
         if not question:
             continue
+
+        answered_question_ids.add(question.id)
 
         total_marks += question.marks
         awarded      = 0.0
@@ -867,12 +1173,22 @@ def submit_test(
 
     db.commit()
 
+    all_question_ids = {
+        q.id for q in db.query(Question).filter(Question.test_id == test_id).all()
+    }
+    skipped_question_ids = sorted(all_question_ids - answered_question_ids)
+
     return {
         "message":          "Test submitted successfully",
+        "status":           submission.status,
+        "submitted_at":     submission.submitted_at,
+        "test_end_time":    test.end_time,
         "obtained_marks":   obtained_marks,
         "total_marks":      total_marks,
         "score_percentage": submission.score_percentage,
         "is_passed":        submission.is_passed,
+        "skipped_questions": len(skipped_question_ids),
+        "skipped_question_ids": skipped_question_ids,
     }
 
 
@@ -1031,7 +1347,8 @@ def profile_summary(
     ).all()
     submitted_ids = {s.assignment_id for s in submissions}
 
-    pending_assignments = sum(1 for a in assignments if a.id not in submitted_ids)
+    assignment_counts = _assignment_counts(db, student_id)
+    pending_assignments = assignment_counts["due"]
 
     # ── tests ─────────────────────────────────────────────────────
     tests = db.query(Test).filter(
@@ -1068,6 +1385,9 @@ def profile_summary(
             "attendance_percentage": attendance_percentage,
             "assignments_total":    len(assignments),
             "assignments_pending":  pending_assignments,
+            "assignments_completed": assignment_counts["completed"],
+            "assignments_due":      assignment_counts["due"],
+            "assignments_overdue":  assignment_counts["overdue"],
             "assignments_submitted": len(submissions),
             "tests_total":          len(tests),
             "tests_attempted":      submitted_tests,

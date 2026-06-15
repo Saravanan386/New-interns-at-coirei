@@ -8,7 +8,8 @@ from app.models import (
     schedule as schedule_model, module, test as test_model, enrollment, 
     assignment as assignment_model, chat as chat_model, notification as notification_model, 
     instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, 
-    group_chat as group_chat_model, registration_profile as registration_profile_model
+    group_chat as group_chat_model, registration_profile as registration_profile_model,
+    tenant as tenant_model,
 )
 from app.models.module import Module, Chapter
 from app.models.chapter_resources import ChapterResource
@@ -46,6 +47,7 @@ from app.routers import (
     chat_uploads,
     ws_chat,
     user_profiles,
+    tenants,
     instructor, # From New
 )
 
@@ -54,6 +56,15 @@ app = FastAPI(
     version="0.1.0",
     description="LMS API with Jitsi video conferencing",
 )
+
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "message": "LMS Backend API is running",
+        "docs": "/docs",
+    }
 
 
 @app.get("/health")
@@ -80,7 +91,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auto-create tables
+Base.metadata.create_all(bind=engine)
 
 # Routers - Carefully merged to prevent duplicates
 app.include_router(auth.router)
@@ -117,4 +128,5 @@ app.include_router(group_chat.router)
 app.include_router(chat_uploads.router)
 app.include_router(ws_chat.router)
 app.include_router(user_profiles.router)
+app.include_router(tenants.router)
 app.include_router(instructor.router)           # From New

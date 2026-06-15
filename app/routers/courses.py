@@ -18,6 +18,7 @@ from app.models.assignment import Assignment
 from app.models.assignment import AssignmentSubmission
 from app.models.test import Test
 from app.models.test import TestSubmission
+from app.models.user import User
 from app.database import get_db
 from app.schemas import (
     CourseCreate,
@@ -329,6 +330,41 @@ def classroom_overview(
             ) / total_students
         )
 
+    attendance_rows = db.query(SessionParticipant).join(
+        ClassSession,
+        ClassSession.id == SessionParticipant.session_id
+    ).filter(
+        ClassSession.classroom_id == classroom.id
+    ).all()
+    attended_rows = [
+        row for row in attendance_rows
+        if row.status in ("present", "late")
+    ]
+    avg_attendance = (
+        round((len(attended_rows) / len(attendance_rows)) * 100, 2)
+        if attendance_rows else 0
+    )
+
+    assignments = db.query(Assignment).filter(
+        Assignment.course_id == classroom.course_id,
+        Assignment.batch_name == classroom.batch_name,
+    ).all()
+    assignment_ids = [assignment.id for assignment in assignments]
+    completed_assignments = (
+        db.query(AssignmentSubmission)
+        .filter(
+            AssignmentSubmission.assignment_id.in_(assignment_ids),
+            AssignmentSubmission.status.in_(["submitted", "graded"]),
+        )
+        .count()
+        if assignment_ids else 0
+    )
+    expected_assignments = len(assignments) * total_students
+    assignment_completion = (
+        round((completed_assignments / expected_assignments) * 100, 2)
+        if expected_assignments else 0
+    )
+
     next_session = db.query(
         ClassSession
     ).filter(
@@ -355,6 +391,10 @@ def classroom_overview(
         "stats": {
             "total_students": total_students,
             "average_progress": avg_progress,
+            "avg_attendance": avg_attendance,
+            "assignment_completion": assignment_completion,
+            "assignments_completed": completed_assignments,
+            "assignments_expected": expected_assignments,
             "next_session": next_session_text,
             "duration_months": course.duration_months
         },
@@ -461,6 +501,41 @@ def batch_overview(
             ) / total_students
         )
 
+    attendance_rows = db.query(SessionParticipant).join(
+        ClassSession,
+        ClassSession.id == SessionParticipant.session_id
+    ).filter(
+        ClassSession.classroom_id == classroom.id
+    ).all()
+    attended_rows = [
+        row for row in attendance_rows
+        if row.status in ("present", "late")
+    ]
+    avg_attendance = (
+        round((len(attended_rows) / len(attendance_rows)) * 100, 2)
+        if attendance_rows else 0
+    )
+
+    assignments = db.query(Assignment).filter(
+        Assignment.course_id == classroom.course_id,
+        Assignment.batch_name == classroom.batch_name,
+    ).all()
+    assignment_ids = [assignment.id for assignment in assignments]
+    completed_assignments = (
+        db.query(AssignmentSubmission)
+        .filter(
+            AssignmentSubmission.assignment_id.in_(assignment_ids),
+            AssignmentSubmission.status.in_(["submitted", "graded"]),
+        )
+        .count()
+        if assignment_ids else 0
+    )
+    expected_assignments = len(assignments) * total_students
+    assignment_completion = (
+        round((completed_assignments / expected_assignments) * 100, 2)
+        if expected_assignments else 0
+    )
+
     sessions = (
         db.query(ClassSession)
         .filter(
@@ -523,6 +598,10 @@ def batch_overview(
         "stats": {
             "total_students": total_students,
             "average_progress": avg_progress,
+            "avg_attendance": avg_attendance,
+            "assignment_completion": assignment_completion,
+            "assignments_completed": completed_assignments,
+            "assignments_expected": expected_assignments,
             "next_session": next_session
         },
 
@@ -648,6 +727,55 @@ def course_full_overview(
         ClassSession.start_time.asc()
     ).limit(10).all()
 
+    attendance_rows = db.query(SessionParticipant).join(
+        ClassSession,
+        ClassSession.id == SessionParticipant.session_id
+    ).join(
+        Classroom,
+        Classroom.id == ClassSession.classroom_id
+    ).filter(
+        Classroom.course_id == course_id
+    ).all()
+
+    present_rows = [
+        row for row in attendance_rows
+        if row.status in ("present", "late")
+    ]
+    avg_attendance = (
+        round((len(present_rows) / len(attendance_rows)) * 100, 2)
+        if attendance_rows else 0
+    )
+
+    course_assignments = db.query(Assignment).filter(
+        Assignment.course_id == course_id
+    ).all()
+    assignment_ids = [assignment.id for assignment in course_assignments]
+    completed_assignment_submissions = (
+        db.query(AssignmentSubmission)
+        .filter(
+            AssignmentSubmission.assignment_id.in_(assignment_ids),
+            AssignmentSubmission.status.in_(["submitted", "graded"]),
+        )
+        .count()
+        if assignment_ids else 0
+    )
+
+    expected_assignment_submissions = 0
+    for assignment in course_assignments:
+        classroom = db.query(Classroom).filter(
+            Classroom.course_id == assignment.course_id,
+            Classroom.batch_name == assignment.batch_name,
+        ).first()
+        if classroom:
+            expected_assignment_submissions += db.query(Enrollment).filter(
+                Enrollment.classroom_id == classroom.id
+            ).count()
+
+    assignment_completion = (
+        round((completed_assignment_submissions / expected_assignment_submissions) * 100, 2)
+        if expected_assignment_submissions else 0
+    )
+
     return {
 
         "course": {
@@ -673,6 +801,14 @@ def course_full_overview(
 
 
             "total_schedules": len(schedules),
+
+            "avg_attendance": avg_attendance,
+
+            "assignment_completion": assignment_completion,
+
+            "assignments_completed": completed_assignment_submissions,
+
+            "assignments_expected": expected_assignment_submissions,
 
             "instructors": list(
                 instructor_names
@@ -753,6 +889,15 @@ def student_course_overview(
             status_code=403,
             detail="Not enrolled in this course"
         )
+
+    classroom = db.query(Classroom).filter(
+        Classroom.id == enrollment.classroom_id
+    ).first()
+
+    instructor = (
+        db.query(User).filter(User.id == classroom.instructor_id).first()
+        if classroom and classroom.instructor_id else None
+    )
 
     modules = (
         db.query(Module)
@@ -848,7 +993,13 @@ def student_course_overview(
             course.duration_months,
 
             "total_lessons":
-            course.total_lessons
+            course.total_lessons,
+
+            "instructor_id":
+            classroom.instructor_id if classroom else None,
+
+            "instructor_name":
+            instructor.name if instructor else (classroom.instructor_name if classroom else None)
         },
 
         "stats": {

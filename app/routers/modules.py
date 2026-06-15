@@ -468,12 +468,13 @@ def get_chapter_details_by_role(
     user_role = current_user.get("role")
 
     # ── INSTRUCTOR VIEW DATA STREAM ──────────────────────────────────────────
-    if user_role == "instructor":
+    if user_role in ("instructor", "admin"):
         return {
-            "view_mode": "instructor",
+            "view_mode": user_role,
             "module_context": {
                 "module_id": module.id,
                 "module_title": module.title,
+                "course_id": module.course_id,
                 "batch_name": module.batch_name
             },
             "chapter_details": {

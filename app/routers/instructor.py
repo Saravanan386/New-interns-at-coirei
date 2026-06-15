@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.attendance import SessionParticipant
+from app.models.classroom import Classroom
 from app.models.course import Course
 from app.models.enrollment import Enrollment
 from app.models.instructor_enrollment import InstructorEnrollment
@@ -25,10 +26,11 @@ def require_instructor(current_user: dict) -> None:
 
 def _assigned_pairs(db: Session, current_user: dict) -> list[tuple[int, str]]:
     if current_user.get("role") == "admin":
-        rows = db.query(Enrollment.course_id, Enrollment.batch_name).distinct().all()
+        rows = db.query(Classroom.course_id, Classroom.batch_name).distinct().all()
     else:
         rows = (
-            db.query(InstructorEnrollment.course_id, InstructorEnrollment.batch_name)
+            db.query(Classroom.course_id, Classroom.batch_name)
+            .join(InstructorEnrollment, InstructorEnrollment.classroom_id == Classroom.id)
             .filter(InstructorEnrollment.user_id == current_user["user_id"])
             .distinct()
             .all()
@@ -227,8 +229,12 @@ def instructor_assignment_submissions(
 
     for assignment in query.order_by(Assignment.created_at.desc()).all():
         enrollments = db.query(Enrollment).filter(
-            Enrollment.course_id == assignment.course_id,
-            Enrollment.batch_name == assignment.batch_name,
+            Enrollment.classroom_id.in_(
+                db.query(Classroom.id).filter(
+                    Classroom.course_id == assignment.course_id,
+                    Classroom.batch_name == assignment.batch_name,
+                )
+            ),
             Enrollment.status == "ongoing",
         ).all()
         submissions = db.query(AssignmentSubmission).filter(
@@ -249,7 +255,7 @@ def instructor_assignment_submissions(
                 "course_id": assignment.course_id,
                 "course_name": course_names.get(assignment.course_id, "Unknown"),
                 "batch_name": assignment.batch_name,
-                "module_name": assignment.module_name,
+                "module_name": assignment.module.title if assignment.module else None,
                 **_student_payload(student),
                 "submission_id": submission.id if submission else None,
                 "status": row_status,
@@ -287,8 +293,12 @@ def instructor_test_results(
 
     for test in query.order_by(Test.created_at.desc()).all():
         enrollments = db.query(Enrollment).filter(
-            Enrollment.course_id == test.course_id,
-            Enrollment.batch_name == test.batch_name,
+            Enrollment.classroom_id.in_(
+                db.query(Classroom.id).filter(
+                    Classroom.course_id == test.course_id,
+                    Classroom.batch_name == test.batch_name,
+                )
+            ),
             Enrollment.status == "ongoing",
         ).all()
         submissions = db.query(TestSubmission).filter(TestSubmission.test_id == test.id).all()
@@ -307,13 +317,13 @@ def instructor_test_results(
                 "course_id": test.course_id,
                 "course_name": course_names.get(test.course_id, "Unknown"),
                 "batch_name": test.batch_name,
-                "module_name": test.module_name,
+                "module_name": test.module.title if test.module else None,
                 **_student_payload(student),
                 "submission_id": submission.id if submission else None,
                 "status": row_status,
                 "started_at": submission.started_at if submission else None,
                 "submitted_at": submission.submitted_at if submission else None,
-                "score": submission.score if submission else None,
+                "score": submission.score_percentage if submission else None,
                 "is_passed": submission.is_passed if submission else None,
             })
 

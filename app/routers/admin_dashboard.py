@@ -1,4 +1,6 @@
+from datetime import datetime, date as date_obj, timedelta
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
@@ -14,6 +16,8 @@ from app.models.enrollment import Enrollment
 from app.models.session import ClassSession
 from app.models.attendance import SessionParticipant
 from app.models.instructor_enrollment import InstructorEnrollment
+from app.models.announcements import Announcement
+from app.models.registration_profile import InstructorInformation, StudentInformation
 
 from app.utils.security import get_current_user
 
@@ -21,6 +25,169 @@ router = APIRouter(
     prefix="/dashboard/admin",
     tags=["Admin Dashboard"]
 )
+
+
+class AdminAnnouncementRequest(BaseModel):
+    course_id: int
+    classroom_id: int | None = None
+    topic: str
+    message: str
+
+
+class AdminInstructorProfileUpdate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone_number: str | None = None
+    bio: str | None = None
+    qualifications: list[str] | None = None
+    experience_years: int | None = None
+    skills: list[str] | None = None
+    specialization: str | None = None
+    profile_image_url: str | None = None
+    account_status: str | None = None
+
+
+class AdminStudentProfileUpdate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone_number: str | None = None
+    profile_image_url: str | None = None
+    account_status: str | None = None
+
+
+def require_admin(current_user: dict):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+
+
+@router.get("/daily-attendance")
+def daily_attendance(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    require_admin(current_user)
+    today = date_obj.today()
+    start_date = today - timedelta(days=max(days - 1, 0))
+
+    rows = (
+        db.query(SessionParticipant, ClassSession, Classroom, Course)
+        .join(ClassSession, ClassSession.id == SessionParticipant.session_id)
+        .join(Classroom, Classroom.id == ClassSession.classroom_id)
+        .join(Course, Course.id == Classroom.course_id)
+        .filter(func.date(ClassSession.start_time) >= start_date)
+        .all()
+    )
+
+    by_date = {}
+    for participant, session, classroom, course in rows:
+        key = session.start_time.date().isoformat() if session.start_time else str(today)
+        bucket = by_date.setdefault(key, {
+            "date": key,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "total": 0,
+            "attendance_percentage": 0,
+        })
+        status = participant.status or "absent"
+        if status in ("present", "absent", "late"):
+            bucket[status] += 1
+        bucket["total"] += 1
+
+    data = []
+    for i in range(max(days, 1)):
+        key = (start_date + timedelta(days=i)).isoformat()
+        bucket = by_date.get(key, {
+            "date": key,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "total": 0,
+            "attendance_percentage": 0,
+        })
+        attended = bucket["present"] + bucket["late"]
+        bucket["attendance_percentage"] = (
+            round((attended / bucket["total"]) * 100, 2)
+            if bucket["total"] else 0
+        )
+        data.append(bucket)
+
+    return {"days": days, "attendance": data}
+
+
+@router.get("/enrollment-growth")
+def enrollment_growth(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    rows = (
+        db.query(Classroom, Course, func.count(Enrollment.id).label("student_count"))
+        .join(Course, Course.id == Classroom.course_id)
+        .outerjoin(Enrollment, Enrollment.classroom_id == Classroom.id)
+        .group_by(Classroom.id, Course.id)
+        .order_by(Course.id.asc(), Classroom.id.asc())
+        .all()
+    )
+
+    total_enrollments = db.query(Enrollment).count()
+
+    return {
+        "total_enrollments": total_enrollments,
+        "growth": [
+            {
+                "classroom_id": classroom.id,
+                "course_id": course.id,
+                "course_name": course.name,
+                "course_code": course.course_code,
+                "batch_name": classroom.batch_name,
+                "student_count": student_count,
+            }
+            for classroom, course, student_count in rows
+        ],
+    }
+
+
+@router.post("/announcements/send")
+def send_announcement(
+    payload: AdminAnnouncementRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    course = db.query(Course).filter(Course.id == payload.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    if payload.classroom_id:
+        classroom = db.query(Classroom).filter(Classroom.id == payload.classroom_id).first()
+        if not classroom:
+            raise HTTPException(status_code=404, detail="Classroom not found")
+        if classroom.course_id != payload.course_id:
+            raise HTTPException(status_code=400, detail="Classroom does not belong to this course")
+
+    announcement = Announcement(
+        instructor_id=current_user["user_id"],
+        course_id=payload.course_id,
+        classroom_id=payload.classroom_id,
+        topic=payload.topic,
+        message=payload.message,
+    )
+    db.add(announcement)
+    db.commit()
+    db.refresh(announcement)
+
+    return {
+        "message": "Announcement sent successfully",
+        "announcement_id": announcement.id,
+        "course_id": announcement.course_id,
+        "classroom_id": announcement.classroom_id,
+        "topic": announcement.topic,
+        "created_at": announcement.created_at,
+    }
 
 
 # -------------------------------------------------------------------
@@ -237,8 +404,8 @@ from datetime import date as date_obj, timedelta
 # -------------------------------------------------------------------
 # A. OVERVIEW METRICS (Updated to match Frontend spec)
 # -------------------------------------------------------------------
-@router.get("/overview/spec")
-def admin_overview_spec(
+@router.get("/legacy/overview/spec", include_in_schema=False)
+def legacy_admin_overview_spec(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -266,8 +433,8 @@ def admin_overview_spec(
 # -------------------------------------------------------------------
 # B. TODAY'S SCHEDULE
 # -------------------------------------------------------------------
-@router.get("/schedule")
-def get_todays_schedule(
+@router.get("/legacy/schedule", include_in_schema=False)
+def legacy_get_todays_schedule(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -315,8 +482,8 @@ def get_todays_schedule(
 # -------------------------------------------------------------------
 # C. TOP PERFORMING COURSES
 # -------------------------------------------------------------------
-@router.get("/top-courses")
-def top_performing_courses(
+@router.get("/legacy/top-courses", include_in_schema=False)
+def legacy_top_performing_courses(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -546,6 +713,53 @@ def instructor_enrollment_list(
     return output
 
 
+@router.get("/instructors/stats")
+def instructor_stats(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    total_instructors = db.query(User).filter(User.role == "instructor").count()
+
+    assigned_rows = db.query(InstructorEnrollment.user_id).distinct().all()
+    assigned_instructor_ids = {row.user_id for row in assigned_rows}
+
+    currently_teaching_rows = (
+        db.query(Classroom.instructor_id)
+        .join(ClassSession, ClassSession.classroom_id == Classroom.id)
+        .filter(ClassSession.status == "live", Classroom.instructor_id != None)
+        .distinct()
+        .all()
+    )
+    currently_teaching = len({row.instructor_id for row in currently_teaching_rows})
+
+    courses_assigned = (
+        db.query(func.count(func.distinct(Classroom.course_id)))
+        .join(InstructorEnrollment, InstructorEnrollment.classroom_id == Classroom.id)
+        .scalar()
+        or 0
+    )
+
+    since = datetime.utcnow() - timedelta(days=30)
+    new_joiners = db.query(InstructorInformation).filter(
+        InstructorInformation.created_at >= since
+    ).count()
+
+    inactive_instructors = db.query(InstructorInformation).filter(
+        InstructorInformation.account_status == "inactive"
+    ).count()
+
+    return {
+        "total_instructors": total_instructors,
+        "currently_teaching": currently_teaching,
+        "new_joiners": new_joiners,
+        "courses_assigned": courses_assigned,
+        "inactive_instructors": inactive_instructors,
+        "assigned_instructors": len(assigned_instructor_ids),
+    }
+
+
 # -------------------------------------------------------------------
 # B. INSTRUCTOR PROFILE DETAIL
 # -------------------------------------------------------------------
@@ -566,6 +780,11 @@ def instructor_profile_detail(
 
     if not instructor:
         raise HTTPException(status_code=404, detail="Instructor profile not found")
+
+    profile = db.query(InstructorInformation).filter(
+        InstructorInformation.user_id == instructor.id
+    ).first()
+
     enrollments = db.query(Classroom, Course).join(
         InstructorEnrollment, InstructorEnrollment.classroom_id == Classroom.id
     ).join(
@@ -573,6 +792,55 @@ def instructor_profile_detail(
     ).filter(InstructorEnrollment.user_id == instructor.id).all()
 
     courses_list = list(set([f"{c.id} - {c.name}" for cl, c in enrollments]))
+    classroom_ids = [cl.id for cl, _ in enrollments]
+
+    total_sessions = (
+        db.query(ClassSession)
+        .filter(ClassSession.classroom_id.in_(classroom_ids))
+        .count()
+        if classroom_ids else 0
+    )
+    completed_sessions = (
+        db.query(ClassSession)
+        .filter(
+            ClassSession.classroom_id.in_(classroom_ids),
+            ClassSession.status == "ended",
+        )
+        .count()
+        if classroom_ids else 0
+    )
+    live_sessions_count = (
+        db.query(ClassSession)
+        .filter(
+            ClassSession.classroom_id.in_(classroom_ids),
+            ClassSession.status == "live",
+        )
+        .count()
+        if classroom_ids else 0
+    )
+
+    attendance_rows = (
+        db.query(SessionParticipant)
+        .join(ClassSession, ClassSession.id == SessionParticipant.session_id)
+        .filter(ClassSession.classroom_id.in_(classroom_ids))
+        .all()
+        if classroom_ids else []
+    )
+    present_rows = [
+        row for row in attendance_rows
+        if row.status in ("present", "late")
+    ]
+    session_attendance = {
+        "total_sessions": total_sessions,
+        "completed_sessions": completed_sessions,
+        "live_sessions": live_sessions_count,
+        "attendance_records": len(attendance_rows),
+        "present_records": len(present_rows),
+        "attendance_percentage": (
+            round((len(present_rows) / len(attendance_rows)) * 100, 2)
+            if attendance_rows else 0
+        ),
+    }
 
     batches_list = [
         {
@@ -585,21 +853,113 @@ def instructor_profile_detail(
     ]
     return {
         "id": str(instructor.id),
-        "name": instructor.name,
-        "email": instructor.email,
-        "avatar": f"https://i.pravatar.cc/150?u={instructor.id}",
+        "name": profile.full_name if profile else instructor.name,
+        "email": profile.email if profile else instructor.email,
+        "avatar": profile.profile_image_url if profile and profile.profile_image_url else f"https://i.pravatar.cc/150?u={instructor.id}",
         "instructorId": instructor.student_id or f"INS-{instructor.id}",
-        "status": "Active",
-        "attendance": "100%",
-        "phone": "+91 9999999999",
-        "joinedDate": "Active Profile",
-        "qualification": "Faculty Staff Member",
+        "status": profile.account_status if profile else "active",
+        "attendance": f"{session_attendance['attendance_percentage']}%",
+        "phone": profile.phone_number if profile else None,
+        "joinedDate": profile.created_at.date().isoformat() if profile and profile.created_at else None,
+        "qualification": profile.qualifications if profile else None,
+        "bio": profile.bio if profile else None,
+        "experience_years": profile.experience_years if profile else None,
+        "skills": profile.skills if profile else None,
+        "specialization": profile.specialization if profile else None,
         "courses": courses_list,
         "batches": batches_list,
-        "attendanceHistory": [],
+        "sessionAttendance": session_attendance,
+        "attendanceHistory": [
+            {
+                "session_id": row.session_id,
+                "user_id": row.user_id,
+                "status": row.status,
+                "joined_at": row.joined_at if hasattr(row, "joined_at") else None,
+                "left_at": row.left_at if hasattr(row, "left_at") else None,
+            }
+            for row in attendance_rows[:20]
+        ],
         "uploadedContent": [],
         "recentActivity": []
     }
+
+
+@router.put("/instructors/{instructor_id}/profile")
+def edit_instructor_profile(
+    instructor_id: str,
+    payload: AdminInstructorProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    instructor = (
+        db.query(User).filter(User.role == "instructor", User.id == int(instructor_id)).first()
+        if instructor_id.isdigit()
+        else db.query(User).filter(User.role == "instructor", User.student_id == instructor_id).first()
+    )
+    if not instructor:
+        raise HTTPException(status_code=404, detail="Instructor profile not found")
+
+    profile = db.query(InstructorInformation).filter(
+        InstructorInformation.user_id == instructor.id
+    ).first()
+
+    if payload.name is not None:
+        instructor.name = payload.name
+        if profile:
+            profile.full_name = payload.name
+    if payload.email is not None:
+        instructor.email = payload.email
+        if profile:
+            profile.email = payload.email
+
+    if profile:
+        update_data = payload.model_dump(exclude_unset=True)
+        field_map = {
+            "phone_number",
+            "bio",
+            "qualifications",
+            "experience_years",
+            "skills",
+            "specialization",
+            "profile_image_url",
+            "account_status",
+        }
+        for key, value in update_data.items():
+            if key in field_map:
+                setattr(profile, key, value)
+
+    db.commit()
+
+    return {"message": "Instructor profile updated successfully", "user_id": instructor.id}
+
+
+@router.put("/instructors/{instructor_id}/deactivate")
+def deactivate_instructor(
+    instructor_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    instructor = (
+        db.query(User).filter(User.role == "instructor", User.id == int(instructor_id)).first()
+        if instructor_id.isdigit()
+        else db.query(User).filter(User.role == "instructor", User.student_id == instructor_id).first()
+    )
+    if not instructor:
+        raise HTTPException(status_code=404, detail="Instructor profile not found")
+
+    profile = db.query(InstructorInformation).filter(
+        InstructorInformation.user_id == instructor.id
+    ).first()
+    if profile:
+        profile.account_status = "inactive"
+
+    db.commit()
+
+    return {"message": "Instructor deactivated successfully", "user_id": instructor.id}
 
 
 
@@ -711,6 +1071,7 @@ def admin_student_detail(
     if not student:
         raise HTTPException(status_code=404, detail="Student target not found")
 
+    profile = db.query(StudentInformation).filter(StudentInformation.user_id == student.id).first()
 
     enrollments = db.query(Enrollment, Classroom, Course).join(
         Classroom, Classroom.id == Enrollment.classroom_id
@@ -749,15 +1110,15 @@ def admin_student_detail(
 
     return {
         "id": student.student_id or str(student.id),
-        "name": student.name,
-        "email": student.email,
-        "phone": "+91 9876543210",
-        "avatar": f"https://i.pravatar.cc/150?u={student.id}",
+        "name": profile.full_name if profile else student.name,
+        "email": profile.email if profile else student.email,
+        "phone": profile.phone_number if profile else None,
+        "avatar": profile.profile_image_url if profile and profile.profile_image_url else f"https://i.pravatar.cc/150?u={student.id}",
         "course": primary_course,
         "courseSubtitle": "",
-        "status": "Active" if enrollments else "Inactive",
+        "status": profile.account_status if profile else ("active" if enrollments else "inactive"),
         "attendance": "100%",
-        "dateJoined": "Active Learner",
+        "dateJoined": profile.created_at.date().isoformat() if profile and profile.created_at else None,
         "certificateStatus": "Verified" if not enrollments else "In Progress",
         "completionDate": "-",
         "action": "Download",
@@ -766,6 +1127,73 @@ def admin_student_detail(
         "testPerformance": [],
         "recentActivity": []
     }
+
+
+@router.put("/students/{id}/profile")
+def edit_student_profile(
+    id: str,
+    payload: AdminStudentProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    student = (
+        db.query(User).filter(User.role == "student", User.id == int(id)).first()
+        if id.isdigit()
+        else db.query(User).filter(User.role == "student", User.student_id == id).first()
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student target not found")
+
+    profile = db.query(StudentInformation).filter(StudentInformation.user_id == student.id).first()
+
+    if payload.name is not None:
+        student.name = payload.name
+        if profile:
+            profile.full_name = payload.name
+    if payload.email is not None:
+        student.email = payload.email
+        if profile:
+            profile.email = payload.email
+
+    if profile:
+        update_data = payload.model_dump(exclude_unset=True)
+        for key in ("phone_number", "profile_image_url", "account_status"):
+            if key in update_data:
+                setattr(profile, key, update_data[key])
+
+    db.commit()
+
+    return {"message": "Student profile updated successfully", "user_id": student.id}
+
+
+@router.put("/students/{id}/deactivate")
+def deactivate_student(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    student = (
+        db.query(User).filter(User.role == "student", User.id == int(id)).first()
+        if id.isdigit()
+        else db.query(User).filter(User.role == "student", User.student_id == id).first()
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student target not found")
+
+    profile = db.query(StudentInformation).filter(StudentInformation.user_id == student.id).first()
+    if profile:
+        profile.account_status = "inactive"
+
+    db.query(Enrollment).filter(Enrollment.user_id == student.id).update({
+        "status": "inactive"
+    })
+    db.commit()
+
+    return {"message": "Student deactivated successfully", "user_id": student.id}
 
 
 
