@@ -1,0 +1,145 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lms}
+      POSTGRES_USER: ${POSTGRES_USER:-lms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lms}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lms} -d ${POSTGRES_DB:-lms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lms}:${POSTGRES_PASSWORD:-lms}@db:5432/${POSTGRES_DB:-lms}
+      JWT_SECRET: ${JWT_SECRET:-change-me-now}
+      JITSI_BASE_URL: ${JITSI_BASE_URL:-http://localhost:8080}
+      JITSI_DOMAIN: ${JITSI_DOMAIN:-http://localhost:8080}
+      JITSI_APP_ID: ${JITSI_APP_ID:-lms-app}
+      JITSI_APP_SECRET: ${JITSI_APP_SECRET:-change-me-now}
+      JITSI_JWT_ISSUER: ${JITSI_JWT_ISSUER:-lms-app}
+      JITSI_JWT_AUDIENCE: ${JITSI_JWT_AUDIENCE:-jitsi}
+      JITSI_JWT_SUBJECT: ${JITSI_JWT_SUBJECT:-localhost}
+      JITSI_TOKEN_TTL_MINUTES: ${JITSI_TOKEN_TTL_MINUTES:-120}
+      PORT: ${PORT:-8000}
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  jitsi-prosody:
+    image: jitsi/prosody:stable
+    restart: unless-stopped
+    environment:
+      ENABLE_AUTH: "1"
+      AUTH_TYPE: jwt
+      JICOFO_AUTH_USER: focus
+      JICOFO_AUTH_PASSWORD: ${JITSI_JICOFO_AUTH_PASSWORD:-focus-secret}
+      JVB_AUTH_USER: ${JITSI_JVB_AUTH_USER:-jvb}
+      JVB_AUTH_PASSWORD: ${JITSI_JVB_AUTH_PASSWORD:-jvb-secret}
+      XMPP_DOMAIN: ${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_AUTH_DOMAIN: auth.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_MUC_DOMAIN: muc.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.${JITSI_XMPP_DOMAIN:-localhost}
+      JWT_APP_ID: ${JITSI_APP_ID:-lms-app}
+      JWT_APP_SECRET: ${JITSI_APP_SECRET:-change-me-now}
+      JWT_ACCEPTED_ISSUERS: ${JITSI_JWT_ISSUER:-lms-app}
+      JWT_ACCEPTED_AUDIENCES: ${JITSI_JWT_AUDIENCE:-jitsi}
+      JWT_ALLOW_EMPTY: "0"
+    volumes:
+      - prosody-config:/config
+      - prosody-plugins:/prosody-plugins-custom
+
+  jitsi-web:
+    image: jitsi/web:stable
+    restart: unless-stopped
+    depends_on:
+      - jitsi-prosody
+    environment:
+      PUBLIC_URL: ${JITSI_BASE_URL:-http://localhost:8080}
+      XMPP_DOMAIN: ${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_AUTH_DOMAIN: auth.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_BOSH_URL_BASE: http://jitsi-prosody:5280
+      # Keep the browser-facing connection URLs relative so local HTTP demos do
+      # not get rewritten into invalid https://http://... endpoints.
+      BOSH_RELATIVE: "1"
+      ENABLE_XMPP_WEBSOCKET: "0"
+      XMPP_MUC_DOMAIN: muc.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.${JITSI_XMPP_DOMAIN:-localhost}
+      ENABLE_AUTH: "1"
+      AUTH_TYPE: jwt
+      ENABLE_GUESTS: "0"
+      DISABLE_HTTPS: "1"
+      JWT_APP_ID: ${JITSI_APP_ID:-lms-app}
+      JWT_APP_SECRET: ${JITSI_APP_SECRET:-change-me-now}
+      JWT_ACCEPTED_ISSUERS: ${JITSI_JWT_ISSUER:-lms-app}
+      JWT_ACCEPTED_AUDIENCES: ${JITSI_JWT_AUDIENCE:-jitsi}
+    volumes:
+      - web-config:/config
+      - web-certs:/config/certs
+
+  jitsi-jicofo:
+    image: jitsi/jicofo:stable
+    restart: unless-stopped
+    depends_on:
+      - jitsi-prosody
+    environment:
+      XMPP_DOMAIN: ${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_AUTH_DOMAIN: auth.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.${JITSI_XMPP_DOMAIN:-localhost}
+      JICOFO_AUTH_USER: focus
+      JICOFO_AUTH_PASSWORD: ${JITSI_JICOFO_AUTH_PASSWORD:-focus-secret}
+      JICOFO_COMPONENT_SECRET: ${JITSI_JICOFO_COMPONENT_SECRET:-component-secret}
+      XMPP_SERVER: jitsi-prosody
+      XMPP_MUC_DOMAIN: muc.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_BOSH_URL_BASE: http://jitsi-web:80/http-bind
+
+  jitsi-jvb:
+    image: jitsi/jvb:stable
+    restart: unless-stopped
+    depends_on:
+      - jitsi-prosody
+    ports:
+      - "10001:10000/udp"
+      - "4443:4443"
+    environment:
+      XMPP_AUTH_DOMAIN: auth.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.${JITSI_XMPP_DOMAIN:-localhost}
+      XMPP_SERVER: jitsi-prosody
+      JVB_AUTH_USER: ${JITSI_JVB_AUTH_USER:-jvb}
+      JVB_AUTH_PASSWORD: ${JITSI_JVB_AUTH_PASSWORD:-jvb-secret}
+      JVB_BREWERY_MUC: jvbbrewery
+      JVB_PORT: 10000
+      JVB_TCP_HARVESTER_DISABLED: "true"
+
+  jitsi-nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - jitsi-web
+    ports:
+      - "8081:80"
+    volumes:
+      - ./docker/jitsi/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
+  prosody-config:
+  prosody-plugins:
+  web-config:
+  web-certs:
