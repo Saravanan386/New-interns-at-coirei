@@ -775,3 +775,14 @@ class StudentRowResponse(BaseModel):
     submission_id: Optional[int]
 
     model_config = ConfigDict(from_attributes=True)
+
+# -------------- FAQ Schemas -------------------
+
+class FAQCreate(BaseModel):
+    course_id: int
+    question: str
+    answer: str
+
+class FAQUpdate(BaseModel):
+    question: Optional[str] = None
+    answer: Optional[str] = None

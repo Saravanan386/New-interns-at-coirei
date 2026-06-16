@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text
 from app.database import Base
+from sqlalchemy.orm import relationship
 
 
 class Course(Base):
@@ -16,3 +17,9 @@ class Course(Base):
     duration_months = Column(Integer)
 
     total_lessons = Column(Integer)
+
+    faqs = relationship(
+        "FAQ",
+        back_populates="course",
+        cascade="all, delete-orphan"
+    )
