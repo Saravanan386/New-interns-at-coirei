@@ -10,6 +10,7 @@ from app.models import (
     instructor_enrollment as instructor_enrollment_model, dm_chat as dm_chat_model, 
     group_chat as group_chat_model, registration_profile as registration_profile_model,
     tenant as tenant_model,
+    faq as faq_model,
 )
 from app.models.module import Module, Chapter
 from app.models.chapter_resources import ChapterResource
@@ -49,6 +50,7 @@ from app.routers import (
     user_profiles,
     tenants,
     instructor, # From New
+    faq,
 )
 
 app = FastAPI(
@@ -123,6 +125,7 @@ app.include_router(batch_analytics.router)
 app.include_router(chat.router)
 app.include_router(notifications.router)
 app.include_router(qa.router)
+app.include_router(faq.router)
 app.include_router(dm_chat.router)
 app.include_router(group_chat.router)
 app.include_router(chat_uploads.router)
