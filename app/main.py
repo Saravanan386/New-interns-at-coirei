@@ -13,6 +13,7 @@ from app.models import (
 )
 from app.models.module import Module, Chapter
 from app.models.chapter_resources import ChapterResource
+from app.routers import announcements
 from app.routers import (
     auth,
     meet,
@@ -95,6 +96,7 @@ Base.metadata.create_all(bind=engine)
 
 # Routers - Carefully merged to prevent duplicates
 app.include_router(auth.router)
+app.include_router(announcements.router)
 app.include_router(meet.router)
 app.include_router(webhooks.router)
 app.include_router(attendance.router)
